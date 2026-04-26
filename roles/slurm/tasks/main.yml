@@ -1,0 +1,55 @@
+---
+# Unified Slurm Role - Main Tasks
+
+- name: Determine node roles from variable
+  ansible.builtin.set_fact:
+    node_roles: "{{ slurm_roles | default([]) }}"
+
+- name: Determine node roles from groups (login)
+  ansible.builtin.set_fact:
+    node_roles: "{{ node_roles | default([]) + ['login'] }}"
+  when:
+    - node_roles | default([]) | length == 0
+    - "'slurm-login' in group_names"
+
+- name: Determine node roles from groups (controller)
+  ansible.builtin.set_fact:
+    node_roles: "{{ node_roles | default([]) + ['controller'] }}"
+  when:
+    - node_roles | default([]) | length == 0
+    - "'slurm-controller' in group_names or 'slurmservers' in group_names"
+
+- name: Determine node roles from groups (exec)
+  ansible.builtin.set_fact:
+    node_roles: "{{ node_roles | default([]) + ['exec'] }}"
+  when:
+    - node_roles | default([]) | length == 0
+    - "'slurm-node' in group_names or 'slurmexechosts' in group_names"
+
+- name: Determine node roles from groups (dbd)
+  ansible.builtin.set_fact:
+    node_roles: "{{ node_roles | default([]) + ['dbd'] }}"
+  when:
+    - "'slurmdbdservers' in group_names"
+    - "'dbd' not in (node_roles | default([]))"
+
+- name: Set default roles if none specified
+  ansible.builtin.set_fact:
+    node_roles: ['exec']
+  when: node_roles | default([]) | length == 0
+
+- name: Display determined roles
+  ansible.builtin.debug:
+    msg: "Node roles: {{ node_roles }}"
+
+- name: Include common setup tasks
+  ansible.builtin.include_tasks: common.yml
+
+- name: Include installation tasks
+  ansible.builtin.include_tasks: install.yml
+
+- name: Include configuration tasks
+  ansible.builtin.include_tasks: configure.yml
+
+- name: Include service tasks
+  ansible.builtin.include_tasks: services.yml

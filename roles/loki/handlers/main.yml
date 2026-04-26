@@ -1,0 +1,13 @@
+---
+- name: restart loki
+  community.docker.docker_compose_v2:
+    project_src: /opt/loki
+    services:
+      - loki
+    state: restarted
+  ignore_errors: true
+  register: restart_result_loki
+
+- name: restart loki (fallback)
+  ansible.builtin.command: docker compose -f /opt/loki/docker-compose.yml restart loki
+  when: restart_result_loki is failed

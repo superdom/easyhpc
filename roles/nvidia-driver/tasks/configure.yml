@@ -1,0 +1,5 @@
+---
+# Backward-compat shim: use consolidated post/configure tasks
+
+- name: Include post-configure tasks
+  ansible.builtin.include_tasks: post/configure.yml

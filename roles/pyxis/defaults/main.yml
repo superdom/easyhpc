@@ -1,0 +1,42 @@
+---
+# Enable/disable Pyxis
+pyxis_enabled: true
+pyxis_force_reinstall: false
+
+pyxis_version: "0.16.1"
+# Always build from source
+pyxis_git_repo: "https://github.com/NVIDIA/pyxis.git"
+pyxis_git_version: "v{{ pyxis_version }}"
+pyxis_source_dir: "/usr/local/src/pyxis"
+
+# Slurm integration (uses slurm_config_dir from group_vars/slurm.yml or slurm/defaults)
+pyxis_slurm_plugstack_conf: "{{ slurm_config_dir | default('/etc/slurm') }}/plugstack.conf"
+pyxis_slurm_plugstack_conf_dir: "{{ slurm_config_dir | default('/etc/slurm') }}/plugstack.conf.d"
+pyxis_slurm_pyxis_conf_path: "{{ pyxis_slurm_plugstack_conf_dir }}/pyxis.conf"
+pyxis_spank_module_path: "{{ slurm_install_prefix | default('/usr/local') }}/lib/slurm"
+
+# Enroot runtime/cache directories (recommended: per-user subdir user-<uid>)
+pyxis_enroot_runtime_base: "/run/enroot"
+pyxis_enroot_cache_base: "/var/lib/enroot-cache"
+pyxis_enroot_data_base: "/tmp/enroot-data"
+pyxis_enroot_runtime_path: "{{ pyxis_enroot_runtime_base }}/user-$(id -u)"
+pyxis_enroot_cache_path: "{{ pyxis_enroot_cache_base }}/user-$(id -u)"
+pyxis_enroot_data_path: "{{ pyxis_enroot_data_base }}/user-$(id -u)"
+pyxis_enroot_config_path: "/etc/enroot"
+
+# Whether to manage Enroot directories only on Slurm nodes
+pyxis_manage_enroot_dirs: true
+
+# Slurm service names (override per distro if needed)
+pyxis_slurmd_service_name: "slurmd"
+pyxis_slurmctld_service_name: "slurmctld"
+
+# Pyxis default options
+pyxis_default_options:
+  # Remap root inside the container (no host root; root only in user namespace)
+  container_remap_root: true
+  # Use Enroot default settings when pulling images
+  # Add ENROOT_* env vars or options here if needed
+
+# Slurm install prefix (backward compatible; override in group_vars if needed)
+# pyxis_slurm_install_prefix: "{{ slurm_install_prefix | default('/usr/local') }}"

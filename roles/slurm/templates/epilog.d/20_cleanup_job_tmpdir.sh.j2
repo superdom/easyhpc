@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+job_id="${SLURM_JOB_ID:-}"
+tmpdir="${SLURM_TMPDIR:-}"
+
+if [[ -z "${job_id}" || -z "${tmpdir}" ]]; then
+  exit 0
+fi
+
+safe_roots=(
+  "{{ slurm_job_tmp_dir | default('/var/spool/slurm/tmp') }}"
+  "/tmp"
+  "/dev/shm"
+  "/var/tmp"
+)
+
+for root in "${safe_roots[@]}"; do
+  if [[ "${tmpdir}" == "${root}/"* && "${tmpdir}" == *"${job_id}"* ]]; then
+    if [[ -d "${tmpdir}" ]]; then
+      rm -rf "${tmpdir}"
+      logger -s -t slurm-epilog "Cleaned SLURM_TMPDIR ${tmpdir}"
+    fi
+    exit 0
+  fi
+done
+
+exit 0

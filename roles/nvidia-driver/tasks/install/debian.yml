@@ -1,0 +1,92 @@
+---
+# Install NVIDIA driver on Ubuntu
+
+- name: Derive effective driver branch
+  ansible.builtin.set_fact:
+    nvidia_driver_branch_effective: "{{ nvidia_driver_branch if nvidia_driver_strategy in ['branch', 'latest'] else (nvidia_driver_version.split('.')[0] if nvidia_driver_version | length > 0 else nvidia_driver_branch) }}"
+
+- name: Detect NVSwitch generation from lspci (best-effort)
+  ansible.builtin.shell: |
+    if command -v lspci >/dev/null 2>&1; then
+      lspci -nn | grep -i nvidia
+    fi
+  register: nvidia_lspci_for_install
+  changed_when: false
+  failed_when: false
+  when:
+    - nvidia_nvswitch_enabled
+    - nvidia_nvswitch_generation_effective is not defined
+
+- name: Set NVSwitch generation for install (best-effort)
+  ansible.builtin.set_fact:
+    nvidia_nvswitch_generation_effective: >-
+      {%- set lspci = (nvidia_lspci_for_install.stdout | default('')) -%}
+      {%- if (lspci | regex_search('B200|H200|B300|B100')) -%}
+      4
+      {%- elif (lspci | regex_search('A100')) -%}
+      3
+      {%- else -%}
+      {{ nvidia_nvswitch_generation }}
+      {%- endif -%}
+  when:
+    - nvidia_nvswitch_enabled
+    - nvidia_lspci_for_install is defined
+
+- name: Build package lists for Ubuntu
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_use_open: "{{ nvidia_nvswitch_enabled and (nvidia_nvswitch_generation_effective | default(nvidia_nvswitch_generation) | int) >= 4 and nvidia_driver_use_open_kernel_modules }}"
+    nvidia_driver_ubuntu_packages_primary: >-
+      {{
+        (
+          (['nvidia-driver-' ~ nvidia_driver_branch_effective ~ '-open', 'nvlink5-' ~ nvidia_driver_branch_effective] +
+          (['nvidia-fabricmanager-' ~ nvidia_driver_branch_effective] if nvidia_fabric_manager_enabled else []))
+          if (nvidia_nvswitch_enabled and (nvidia_nvswitch_generation_effective | default(nvidia_nvswitch_generation) | int) >= 4 and nvidia_driver_use_open_kernel_modules)
+          else
+          (['cuda-drivers-fabricmanager-' ~ nvidia_driver_branch_effective] if nvidia_nvswitch_enabled else ['cuda-drivers-' ~ nvidia_driver_branch_effective])
+        ) + ['nvidia-utils-' ~ nvidia_driver_branch_effective] + nvidia_driver_ubuntu_packages_extra
+      }}
+    nvidia_driver_ubuntu_packages_fallback: >-
+      {{
+        (['cuda-drivers-fabricmanager-' ~ nvidia_driver_branch_effective] if nvidia_nvswitch_enabled else ['cuda-drivers-' ~ nvidia_driver_branch_effective])
+        + ['nvidia-utils-' ~ nvidia_driver_branch_effective]
+        + nvidia_driver_ubuntu_packages_extra
+      }}
+
+- name: Remove unversioned Fabric Manager (if present)
+  ansible.builtin.apt:
+    name: nvidia-fabricmanager
+    state: absent
+  when: nvidia_fabric_manager_enabled
+
+- name: Install NVIDIA driver packages (Ubuntu)
+  block:
+    - name: Install primary NVIDIA driver packages (Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_ubuntu_packages_primary }}"
+        state: "{{ nvidia_driver_package_state }}"
+        update_cache: true
+        allow_downgrade: "{{ nvidia_driver_allow_downgrade }}"
+      register: nvidia_driver_install
+      retries: 3
+      delay: 10
+      until: nvidia_driver_install is succeeded
+  rescue:
+    - name: Warn and retry with fallback package set
+      ansible.builtin.debug:
+        msg: "Primary package set failed; retrying with fallback packages for Ubuntu."
+
+    - name: Install fallback NVIDIA driver packages (Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_ubuntu_packages_fallback }}"
+        state: "{{ nvidia_driver_package_state }}"
+        update_cache: true
+        allow_downgrade: "{{ nvidia_driver_allow_downgrade }}"
+      register: nvidia_driver_install
+      retries: 3
+      delay: 10
+      until: nvidia_driver_install is succeeded
+
+- name: Set reboot flag if driver packages were installed
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when: nvidia_driver_install.changed

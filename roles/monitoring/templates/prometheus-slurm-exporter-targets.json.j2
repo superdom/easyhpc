@@ -1,0 +1,8 @@
+{%- set targets = [] -%}
+{%- for host in groups['slurm-controller'] | default([]) -%}
+{%- set host_monitoring_enabled = (hostvars[host].monitoring_enabled | default(monitoring_enabled | default(false))) | bool -%}
+{%- if host_monitoring_enabled -%}
+{%- set _ = targets.append((hostvars[host].ansible_host | default(host)) ~ ':' ~ slurm_exporter_port) -%}
+{%- endif -%}
+{%- endfor -%}
+{{ [ {"targets": targets} ] | to_json }}

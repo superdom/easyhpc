@@ -1,0 +1,114 @@
+---
+# Prometheus setup tasks
+
+- name: Calculate derived variables for templates
+  ansible.builtin.set_fact:
+    has_gpu: "{{ (gpu_count | default(0) | int) > 0 }}"
+    monitoring_enabled_bool: "{{ monitoring_enabled | default(false) | bool }}"
+
+- name: Check if Prometheus container exists
+  ansible.builtin.command: docker ps -a --filter name=prometheus --format "{{ '{{' }}.Names{{ '}}' }}"
+  register: prometheus_container_check
+  changed_when: false
+  failed_when: false
+
+- name: Determine if Prometheus needs reinstallation
+  ansible.builtin.set_fact:
+    prometheus_needs_reinstall: "{{ prometheus_force_reinstall | default(false) | bool }}"
+
+- name: Stop and remove Prometheus container if force reinstall
+  ansible.builtin.command: docker stop prometheus && docker rm prometheus
+  when:
+    - prometheus_needs_reinstall | default(false) | bool
+    - prometheus_container_check.stdout != ""
+  ignore_errors: yes
+
+- name: Create Prometheus directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ prometheus_data_dir }}"
+    - /etc/prometheus
+    - /etc/prometheus/rules
+    - /etc/prometheus/targets
+
+- name: Ensure Prometheus data directory ownership for container user
+  ansible.builtin.file:
+    path: "{{ prometheus_data_dir }}"
+    state: directory
+    owner: "65534"
+    group: "65534"
+    mode: "0755"
+    recurse: true
+
+- name: Create Prometheus configuration
+  ansible.builtin.copy:
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+        external_labels:
+          cluster: '{{ cluster_name }}'
+
+      scrape_configs:
+        - job_name: 'prometheus'
+          static_configs:
+            - targets: ['localhost:{{ prometheus_port }}']
+
+        - job_name: 'node_exporter'
+          file_sd_configs:
+            - files:
+                - /etc/prometheus/targets/node_exporter.json
+
+        - job_name: 'slurm_exporter'
+          file_sd_configs:
+            - files:
+                - /etc/prometheus/targets/slurm_exporter.json
+
+        - job_name: 'dcgm_exporter'
+          file_sd_configs:
+            - files:
+                - /etc/prometheus/targets/dcgm_exporter.json
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets:
+                  - 'localhost:{{ alertmanager_port }}'
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Deploy Prometheus node_exporter targets
+  ansible.builtin.template:
+    src: prometheus-node-exporter-targets.json.j2
+    dest: /etc/prometheus/targets/node_exporter.json
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Deploy Prometheus slurm_exporter targets
+  ansible.builtin.template:
+    src: prometheus-slurm-exporter-targets.json.j2
+    dest: /etc/prometheus/targets/slurm_exporter.json
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Deploy Prometheus dcgm_exporter targets
+  ansible.builtin.template:
+    src: prometheus-dcgm-exporter-targets.json.j2
+    dest: /etc/prometheus/targets/dcgm_exporter.json
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart prometheus
+

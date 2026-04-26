@@ -1,0 +1,199 @@
+---
+# Common role tasks
+
+- name: Include OS-specific tasks
+  ansible.builtin.include_tasks: "{{ ansible_facts[\"os_family\"] }}.yml"
+  loop_control:
+    label: "{{ ansible_facts[\"os_family\"] }}"
+
+- name: Ensure service groups exist (munge, slurm)
+  ansible.builtin.group:
+    name: "{{ item.group }}"
+    gid: "{{ item.gid }}"
+    state: present
+  loop:
+    - "{{ munge_user }}"
+    - "{{ slurm_user }}"
+  loop_control:
+    label: "{{ item.group }}"
+  when: item.create | default(true)
+
+- name: Ensure service users exist (munge, slurm)
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    uid: "{{ item.uid }}"
+    group: "{{ item.group }}"
+    system: true
+    shell: "{{ item.shell }}"
+    home: "{{ item.home }}"
+    create_home: false
+    comment: "{{ item.comment }}"
+    state: present
+  loop:
+    - "{{ munge_user }}"
+    - "{{ slurm_user }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.create | default(true)
+
+# Install packages after pre-creating service users so package postinst scripts
+# pick up the desired UID/GID and avoid usermod conflicts with running daemons.
+- name: Install system packages
+  ansible.builtin.package:
+    name: "{{ system_packages[ansible_facts[\"os_family\"]] }}"
+    state: present
+
+- name: Install Munge packages (SLURM nodes only)
+  ansible.builtin.package:
+    name: "{{ munge_packages[ansible_facts[\"os_family\"]] }}"
+    state: present
+  when: is_slurm_node | default(false)
+
+# Slurm/Munge service users are provisioned here so other roles (NFS, Slurm, Munge)
+# can rely on consistent UID/GID across nodes.
+
+- name: Ensure chrony keyfile exists
+  ansible.builtin.file:
+    path: /etc/chrony.keys
+    state: touch
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Deploy chrony configuration
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart chrony service
+
+- name: Enable and start chrony service
+  ansible.builtin.systemd:
+    name: chronyd
+    enabled: true
+    state: started
+
+- name: Deploy system limits configuration
+  ansible.builtin.template:
+    src: limits.conf.j2
+    dest: /etc/security/limits.d/slurm.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Notify limits configuration updated
+
+- name: Deploy kernel parameters configuration
+  ansible.builtin.template:
+    src: sysctl.conf.j2
+    dest: /etc/sysctl.d/99-slurm.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload sysctl kernel parameters
+
+- name: Check if Munge key exists
+  ansible.builtin.stat:
+    path: /etc/munge/munge.key
+  register: munge_key_exists
+  run_once: true
+  delegate_to: "{{ groups['slurm-controller'][0] }}"
+  when:
+    - groups['slurm-controller'] is defined
+    - (groups['slurm-controller'] | length) > 0
+
+- name: Generate Munge key on controller
+  ansible.builtin.command: /usr/sbin/create-munge-key -f
+  args:
+    creates: /etc/munge/munge.key
+  when:
+    - groups['slurm-controller'] is defined
+    - (groups['slurm-controller'] | length) > 0
+    - not (munge_key_exists.stat.exists | default(false))
+  run_once: true
+  delegate_to: "{{ groups['slurm-controller'][0] }}"
+  register: munge_key_generated
+  ignore_errors: true
+  failed_when: false
+
+- name: Generate Munge key using dd if create-munge-key not available
+  ansible.builtin.command: dd if=/dev/urandom of=/etc/munge/munge.key bs=1024 count=1
+  args:
+    creates: /etc/munge/munge.key
+  when:
+    - groups['slurm-controller'] is defined
+    - (groups['slurm-controller'] | length) > 0
+    - not (munge_key_exists.stat.exists | default(false))
+    - munge_key_generated is not defined or munge_key_generated is failed or (munge_key_generated.rc | default(1)) != 0
+  run_once: true
+  delegate_to: "{{ groups['slurm-controller'][0] }}"
+  register: munge_key_generated_dd
+
+- name: Set Munge key permissions
+  ansible.builtin.file:
+    path: /etc/munge/munge.key
+    owner: "{{ munge_user.name }}"
+    group: "{{ munge_user.group }}"
+    mode: '0400'
+  when:
+    - groups['slurm-controller'] is defined
+    - (groups['slurm-controller'] | length) > 0
+    - (munge_key_generated.changed | default(false)) or (munge_key_generated_dd.changed | default(false)) or (munge_key_exists.stat.exists | default(false))
+  run_once: true
+  delegate_to: "{{ groups['slurm-controller'][0] }}"
+  register: munge_key_perms_set
+
+- name: Fetch Munge key from controller
+  ansible.builtin.fetch:
+    src: /etc/munge/munge.key
+    dest: "/tmp/munge_key_{{ groups['slurm-controller'][0] }}.key"
+    flat: yes
+  delegate_to: "{{ groups['slurm-controller'][0] }}"
+  run_once: true
+  when:
+    - groups['slurm-controller'] is defined
+    - (groups['slurm-controller'] | length) > 0
+  register: munge_key_fetched
+
+- name: Copy Munge key from controller to all nodes
+  ansible.builtin.copy:
+    src: "/tmp/munge_key_{{ groups['slurm-controller'][0] }}.key"
+    dest: /etc/munge/munge.key
+    owner: "{{ munge_user.name }}"
+    group: "{{ munge_user.group }}"
+    mode: '0400'
+    force: yes
+  when: is_slurm_node | default(false)
+  register: munge_key_copied
+
+- name: Clean up temporary Munge key file
+  ansible.builtin.file:
+    path: "/tmp/munge_key_{{ groups['slurm-controller'][0] }}.key"
+    state: absent
+  delegate_to: localhost
+  run_once: true
+  when: munge_key_fetched is succeeded
+
+- name: Restart Munge service after key copy or generation
+  ansible.builtin.systemd:
+    name: munge
+    state: restarted
+  when: 
+    - munge_key_copied.changed | default(false) or munge_key_generated.changed | default(false) or munge_key_generated_dd.changed | default(false)
+    - is_slurm_node | default(false)
+
+- name: Enable and start Munge service
+  ansible.builtin.systemd:
+    name: munge
+    enabled: true
+    state: started
+  when: is_slurm_node | default(false)
+
+- name: Setup log rotation for SLURM
+  ansible.builtin.template:
+    src: slurm-logrotate.j2
+    dest: /etc/logrotate.d/slurm
+    owner: root
+    group: root
+    mode: '0644'

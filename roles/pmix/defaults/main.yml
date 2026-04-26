@@ -1,0 +1,52 @@
+---
+# PMIx Role Defaults
+
+pmix_version: "4.2.9"
+pmix_install_prefix: "/opt/hpc/stack/pmix"
+
+# Parallel build configuration
+# Number of parallel make jobs (defaults to CPU count)
+pmix_make_jobs: "{{ ansible_facts['processor_vcpus'] | default(4) }}"
+
+pmix_build_dependencies:
+  RedHat:
+    - "gcc"
+    - "gcc-c++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkgconfig"
+    - "wget"
+    - "tar"
+    - "gzip"
+    - "bzip2"
+    - "xz"
+    - "libevent-devel"
+    - "munge-devel"
+  Debian:
+    - "gcc"
+    - "g++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkg-config"
+    - "wget"
+    - "tar"
+    - "gzip"
+    - "bzip2"
+    - "xz-utils"
+    - "libevent-dev"
+    - "libmunge-dev"
+pmix_libevent_libdir_map:
+  RedHat: "/usr/lib64"
+  Debian: "/usr/lib/{{ ansible_facts['architecture'] }}-linux-gnu"
+pmix_build_dir: "/tmp/pmix-build"
+pmix_source_url: "https://github.com/openpmix/openpmix/releases/download/v{{ pmix_version }}/pmix-{{ pmix_version }}.tar.bz2"
+pmix_source_dir: "{{ pmix_build_dir }}/pmix-{{ pmix_version }}"
+pmix_libevent_prefix: "/usr"
+pmix_libevent_libdir: "{{ pmix_libevent_libdir_map[ansible_facts['os_family']] | default('/usr/lib/' ~ ansible_facts['architecture'] ~ '-linux-gnu') }}"
+pmix_configure_options: "./configure --prefix={{ pmix_install_prefix }} --with-hwloc={{ hwloc_install_prefix }} --with-libevent={{ pmix_libevent_prefix }} --with-libevent-libdir={{ pmix_libevent_libdir }} --with-munge"
+pmix_force_rebuild: false
+pmix_build_cleanup: true

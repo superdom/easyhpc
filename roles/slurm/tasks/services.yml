@@ -1,0 +1,310 @@
+---
+# Service management tasks
+# Simple, clear service startup sequence
+
+# Ensure all Slurm services are stopped and disabled on login-only nodes
+- name: Gather service facts on login-only nodes
+  ansible.builtin.service_facts:
+  when:
+    - "'login' in node_roles"
+    - "'exec' not in node_roles"
+    - "'controller' not in node_roles"
+
+- name: Stop and disable Slurm services on login-only nodes
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - slurmctld
+    - slurmdbd
+    - slurmd
+  when:
+    - "'login' in node_roles"
+    - "'exec' not in node_roles"
+    - "'controller' not in node_roles"
+    - ansible_facts.services[item + '.service'] is defined
+
+- name: Mask Slurm services on login-only nodes
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+  loop:
+    - slurmctld
+    - slurmdbd
+    - slurmd
+  when:
+    - "'login' in node_roles"
+    - "'exec' not in node_roles"
+    - "'controller' not in node_roles"
+    - ansible_facts.services[item + '.service'] is defined
+
+# Ensure slurmd is stopped on nodes that should not run it (controller-only or login)
+- name: Check if slurmd service file exists
+  ansible.builtin.stat:
+    path: /etc/systemd/system/slurmd.service
+  register: slurmd_service_file
+  when: ("controller" in node_roles and "exec" not in node_roles) or ("login" in node_roles)
+
+- name: Ensure slurmd is stopped where not needed
+  ansible.builtin.systemd:
+    name: slurmd
+    state: stopped
+    enabled: false
+  when:
+    - slurmd_service_file is defined
+    - slurmd_service_file.stat.exists | default(false)
+    - ("controller" in node_roles and "exec" not in node_roles) or ("login" in node_roles)
+
+- name: Determine slurmdbd task target
+  ansible.builtin.set_fact:
+    slurm_dbd_target: >-
+      {{
+        (slurm_accounting_enabled | default(false) | bool)
+        and (
+          ('dbd' in node_roles)
+          or (('controller' in node_roles) and (inventory_hostname == (groups['slurm-controller'][0] | default(''))))
+        )
+      }}
+
+# ============================================
+# Step 1: Verify MySQL is accessible
+# ============================================
+- name: Verify MySQL is accessible
+  ansible.builtin.command: >
+    mysql -h 127.0.0.1
+    -u {{ mysql_user | default(slurm_user.name) }} -p{{ mysql_password | default('slurm_password_change_me') }}
+    -e "SELECT 1" {{ mysql_database | default('slurm_acct_db') }}
+  register: mysql_connection_test
+  changed_when: false
+  when: slurm_dbd_target
+  no_log: true
+
+- name: Display MySQL connection status
+  ansible.builtin.debug:
+    msg: "MySQL connection: {{ 'SUCCESS' if mysql_connection_test.rc == 0 else 'FAILED - Check MySQL service and credentials' }}"
+  when:
+    - slurm_dbd_target
+    - mysql_connection_test is defined
+
+# ============================================
+# Step 2: Verify slurmdbd.conf exists and start slurmdbd
+# ============================================
+- name: Verify slurmdbd.conf exists with correct permissions
+  ansible.builtin.stat:
+    path: "{{ slurm_config_dir }}/slurmdbd.conf"
+  register: slurmdbd_conf_stat
+  when: slurm_dbd_target
+
+- name: Display slurmdbd.conf status
+  ansible.builtin.debug:
+    msg: "slurmdbd.conf: {{ 'EXISTS' if slurmdbd_conf_stat.stat.exists else 'MISSING - Configuration file not found' }}"
+  when:
+    - slurm_dbd_target
+    - slurmdbd_conf_stat is defined
+
+- name: Verify required directories exist with correct permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0755'
+  loop:
+    - "{{ slurm_log_dir }}"
+    - "{{ slurm_log_dir }}/archive"
+    - "{{ slurm_spool_dir }}"
+  when: slurm_dbd_target
+
+- name: Start and enable slurmdbd
+  ansible.builtin.systemd:
+    name: slurmdbd
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: slurm_dbd_target
+
+- name: Wait for slurmdbd port to be ready
+  ansible.builtin.wait_for:
+    port: "{{ slurm_dbd_port }}"
+    host: "127.0.0.1"
+    delay: 2
+    timeout: 60
+  when: slurm_dbd_target
+
+- name: Wait for slurmdbd to be fully ready (check service is active)
+  ansible.builtin.systemd:
+    name: slurmdbd
+  register: slurmdbd_ready_check
+  until: slurmdbd_ready_check.status.ActiveState == 'active'
+  retries: 10
+  delay: 3
+  when: slurm_dbd_target
+  changed_when: false
+
+- name: Check slurmdbd service status
+  ansible.builtin.systemd:
+    name: slurmdbd
+  register: slurmdbd_status
+  when: slurm_dbd_target
+
+- name: Display slurmdbd logs if failed
+  ansible.builtin.command: journalctl -u slurmdbd -n 50 --no-pager
+  register: slurmdbd_logs
+  changed_when: false
+  when:
+    - slurm_dbd_target
+    - slurmdbd_status.status.ActiveState | default('inactive') != 'active'
+  ignore_errors: true
+
+- name: Display slurmdbd status
+  ansible.builtin.debug:
+    msg:
+      - "slurmdbd service state: {{ slurmdbd_status.status.ActiveState | default('unknown') }}"
+      - "slurmdbd logs (last 50 lines):"
+      - "{{ slurmdbd_logs.stdout_lines | default([]) }}"
+  when:
+    - slurm_dbd_target
+    - slurmdbd_status.status.ActiveState | default('inactive') != 'active'
+    - slurmdbd_logs is defined
+
+# ============================================
+# Step 3: Verify slurm.conf exists before starting slurmctld
+# ============================================
+- name: Verify slurm.conf exists
+  ansible.builtin.stat:
+    path: "{{ slurm_config_dir }}/slurm.conf"
+  register: slurm_conf_stat
+  when: "'controller' in node_roles"
+
+- name: Display slurm.conf status
+  ansible.builtin.debug:
+    msg: "slurm.conf: {{ 'EXISTS' if slurm_conf_stat.stat.exists else 'MISSING - Configuration file not found' }}"
+  when:
+    - "'controller' in node_roles"
+    - slurm_conf_stat is defined
+
+# ============================================
+# Step 4: Verify required directories and clean StateSaveLocation (always, before slurmctld start)
+# ============================================
+- name: Verify required directories exist with correct permissions for slurmctld
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0755'
+  loop:
+    - "{{ slurm_spool_dir }}"
+    - "{{ slurm_spool_dir }}/slurmctld"
+    - "{{ slurm_log_dir }}"
+    - "{{ slurm_config.StateSaveLocation }}"
+  when: "'controller' in node_roles"
+  ignore_errors: false
+
+- name: Find StateSaveLocation contents
+  ansible.builtin.find:
+    paths: "{{ slurm_config.StateSaveLocation }}"
+    file_type: any
+    hidden: true
+  register: slurm_state_contents
+  when:
+    - "'controller' in node_roles"
+    - not (slurm_ha_enabled | default(false) | bool)
+    - slurm_state_cleanup | default(false) | bool
+
+- name: Remove StateSaveLocation contents
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ slurm_state_contents.files | default([]) }}"
+  when:
+    - slurm_state_contents is defined
+    - slurm_state_contents.files is defined
+    - slurm_state_contents.files | length > 0
+
+# ============================================
+# Step 5: Ensure slurmdbd is ready before starting slurmctld
+# ============================================
+- name: Wait for slurmdbd port to be ready (if accounting enabled)
+  ansible.builtin.wait_for:
+    port: "{{ slurm_dbd_port }}"
+    host: "{{ '127.0.0.1' if inventory_hostname == (groups['slurm-controller'][0] | default('')) else (slurm_config.AccountingStorageHost | default('127.0.0.1')) }}"
+    delay: 2
+    timeout: 60
+  when:
+    - "'controller' in node_roles"
+    - slurm_accounting_enabled
+
+- name: Wait for slurmdbd service to be active (if accounting enabled)
+  ansible.builtin.systemd:
+    name: slurmdbd
+  register: slurmdbd_active_check
+  until: slurmdbd_active_check.status.ActiveState == 'active'
+  retries: 10
+  delay: 3
+  when:
+    - "'controller' in node_roles"
+    - slurm_accounting_enabled
+    - inventory_hostname == (groups['slurm-controller'][0] | default(''))
+  changed_when: false
+
+# ============================================
+# Step 6: Start slurmctld
+# ============================================
+- name: Start and enable slurmctld
+  ansible.builtin.systemd:
+    name: slurmctld
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: "'controller' in node_roles"
+
+- name: Wait for slurmctld port to be ready
+  ansible.builtin.wait_for:
+    port: "{{ slurm_config.SlurmctldPort | default(slurm_controller_port) }}"
+    host: "127.0.0.1"
+    delay: 2
+    timeout: 30
+  when: "'controller' in node_roles"
+
+# ============================================
+# Step 7: Verify slurmctld status and display logs if failed
+# ============================================
+- name: Check slurmctld service status
+  ansible.builtin.systemd:
+    name: slurmctld
+  register: slurmctld_status
+  when: "'controller' in node_roles"
+
+- name: Get slurmctld logs if service failed
+  ansible.builtin.command: journalctl -u slurmctld -n 50 --no-pager
+  register: slurmctld_logs
+  changed_when: false
+  when:
+    - "'controller' in node_roles"
+    - slurmctld_status.status.ActiveState | default('inactive') != 'active'
+  ignore_errors: true
+
+- name: Display slurmctld status and logs
+  ansible.builtin.debug:
+    msg:
+      - "slurmctld service state: {{ slurmctld_status.status.ActiveState | default('unknown') }}"
+      - "slurmctld service substate: {{ slurmctld_status.status.SubState | default('unknown') }}"
+      - "slurmctld logs (last 50 lines):"
+      - "{{ slurmctld_logs.stdout_lines | default([]) }}"
+  when:
+    - "'controller' in node_roles"
+    - slurmctld_status.status.ActiveState | default('inactive') != 'active'
+    - slurmctld_logs is defined
+
+# ============================================
+# Step 8: Start slurmd (on exec nodes)
+# ============================================
+- name: Start and enable slurmd
+  ansible.builtin.systemd:
+    name: slurmd
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: "'exec' in node_roles"

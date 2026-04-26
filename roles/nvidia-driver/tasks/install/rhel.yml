@@ -1,0 +1,72 @@
+---
+# Install: RHEL/Rocky
+
+- name: Add CUDA repository (RHEL/Rocky)
+  ansible.builtin.yum_repository:
+    name: cuda
+    description: NVIDIA CUDA Repository
+    baseurl: "{{ nvidia_driver_rhel_cuda_repo_url }}/{{ nvidia_driver_rhel_repo_id }}/x86_64"
+    gpgcheck: true
+    enabled: true
+    gpgkey: "{{ nvidia_driver_rhel_cuda_repo_url }}/{{ nvidia_driver_rhel_repo_id }}/x86_64/D42D0685.pub"
+    module_hotfixes: true
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - nvidia_driver_use_official_repo
+
+- name: Update dnf cache (RHEL/Rocky)
+  ansible.builtin.dnf:
+    update_cache: true
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - nvidia_driver_use_official_repo
+
+- name: Set module stream and profile (RHEL/Rocky)
+  ansible.builtin.set_fact:
+    nvidia_driver_rhel_use_open: "{{ nvidia_driver_use_open_kernel_modules and ((nvidia_gpu_class | default('') in ['rtx', 'a100', 'h100', 'b200']) or nvidia_nvswitch_required) }}"
+    nvidia_driver_rhel_module_stream_effective: >-
+      {{
+        nvidia_driver_rhel_module_stream
+        if nvidia_driver_rhel_module_stream | length > 0
+        else
+        (
+          'open-dkms' if (nvidia_driver_rhel_use_open and nvidia_driver_strategy == 'latest')
+          else
+          (
+            'latest-dkms' if (not nvidia_driver_rhel_use_open and nvidia_driver_strategy == 'latest')
+            else
+            (nvidia_driver_branch_effective ~ '-open' if nvidia_driver_rhel_use_open else nvidia_driver_branch_effective)
+          )
+        )
+      }}
+    nvidia_driver_rhel_module_profile_effective: >-
+      {{
+        nvidia_driver_rhel_module_profile
+        if nvidia_driver_rhel_module_profile | length > 0
+        else
+        ('fm' if (nvidia_nvswitch_required and nvidia_fabric_manager_enabled) else 'default')
+      }}
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Reset NVIDIA driver module (RHEL/Rocky)
+  ansible.builtin.command: dnf module reset -y nvidia-driver
+  changed_when: false
+  failed_when: false
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - nvidia_driver_rhel_module_reset
+
+- name: Install NVIDIA driver module (RHEL/Rocky)
+  ansible.builtin.command: >-
+    dnf -y module install nvidia-driver:{{ nvidia_driver_rhel_module_stream_effective }}/{{ nvidia_driver_rhel_module_profile_effective }}
+  register: nvidia_driver_install
+  changed_when: "'Nothing to do' not in ((nvidia_driver_install.stdout | default('')) + (nvidia_driver_install.stderr | default('')))"
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Install extra NVIDIA packages (RHEL/Rocky)
+  ansible.builtin.dnf:
+    name: "{{ (['nv-persistence-mode'] if nvidia_driver_persistence_mode else []) + nvidia_driver_rhel_packages_extra }}"
+    state: "{{ nvidia_driver_package_state }}"
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ((['nv-persistence-mode'] if nvidia_driver_persistence_mode else []) + nvidia_driver_rhel_packages_extra) | length > 0

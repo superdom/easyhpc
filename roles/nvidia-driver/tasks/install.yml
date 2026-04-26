@@ -1,0 +1,5 @@
+---
+# Install wrapper (kept for compatibility)
+
+- name: Install NVIDIA driver (repo + packages)
+  ansible.builtin.include_tasks: install/main.yml

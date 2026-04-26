@@ -1,0 +1,50 @@
+dn: {{ ldap_suffix }}
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: {{ ldap_domain }}
+dc: {{ ldap_domain.split('.')[0] }}
+
+dn: {{ ldap_service_accounts_ou }}
+objectClass: organizationalUnit
+ou: ServiceAccounts
+
+dn: cn={{ ldap_bind_cn }},{{ ldap_service_accounts_ou }}
+objectClass: top
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: {{ ldap_bind_cn }}
+description: Service account for LDAP binds (SSSD)
+userPassword: {{ ldap_bind_pw_hash }}
+
+dn: {{ ldap_people_ou }}
+objectClass: organizationalUnit
+ou: People
+
+dn: {{ ldap_groups_ou }}
+objectClass: organizationalUnit
+ou: Groups
+
+{% for group in ldap_seed_groups %}
+dn: cn={{ group.name }},{{ ldap_groups_ou }}
+objectClass: top
+objectClass: posixGroup
+cn: {{ group.name }}
+gidNumber: {{ group.gidNumber }}
+
+{% endfor %}
+{% for user in ldap_seed_users %}
+dn: uid={{ user.name }},{{ ldap_people_ou }}
+objectClass: top
+objectClass: posixAccount
+objectClass: inetOrgPerson
+cn: {{ user.cn | default(user.name) }}
+sn: {{ user.sn | default(user.name) }}
+uid: {{ user.name }}
+uidNumber: {{ user.uidNumber | default(ldap_uid_start + loop.index0) }}
+gidNumber: {{ user.gidNumber | default(ldap_seed_groups[0].gidNumber if ldap_seed_groups | length > 0 else ldap_gid_start) }}
+homeDirectory: {{ user.homeDirectory | default(ldap_home_prefix ~ '/' ~ user.name) }}
+loginShell: {{ user.loginShell | default(ldap_default_shell) }}
+userPassword: {{ user.userPassword | default('{CRYPT}x') }}
+
+{% endfor %}

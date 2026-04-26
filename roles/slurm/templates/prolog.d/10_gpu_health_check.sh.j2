@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  exit 0
+fi
+
+if ! nvidia-smi -L >/dev/null 2>&1; then
+  logger -s -t slurm-prolog "nvidia-smi unavailable on node ${HOSTNAME}"
+  exit 1
+fi
+
+while IFS=',' read -r gpu_idx corr uncorr; do
+  gpu_idx="${gpu_idx//[^0-9]/}"
+  corr="${corr//[^0-9]/}"
+  uncorr="${uncorr//[^0-9]/}"
+  if [[ -n "${uncorr}" && "${uncorr}" -gt 0 ]]; then
+    logger -s -t slurm-prolog "GPU ${gpu_idx} reports ${uncorr} uncorrectable retired pages"
+    exit 1
+  fi
+done < <(nvidia-smi --query-gpu=index,retired_pages.correctable.total,retired_pages.uncorrectable.total --format=csv,noheader,nounits)
+
+exit 0

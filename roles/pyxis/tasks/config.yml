@@ -1,0 +1,58 @@
+---
+- name: "Create Enroot runtime directory base"
+  ansible.builtin.file:
+    path: "{{ pyxis_enroot_runtime_base }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "1777"
+
+- name: "Create Enroot data directory base"
+  ansible.builtin.file:
+    path: "{{ pyxis_enroot_data_base }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ '1777' if pyxis_enroot_data_base | default('') | regex_search('^/tmp') else '0755' }}"
+
+- name: "Create Enroot cache directory base"
+  ansible.builtin.file:
+    path: "{{ pyxis_enroot_cache_base }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "1777"
+
+- name: "Create Enroot config directory"
+  ansible.builtin.file:
+    path: "{{ pyxis_enroot_config_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "Ensure tmpfiles entry for Enroot runtime"
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/enroot.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible (pyxis role)
+      d /run/enroot 1777 root root -
+
+- name: "Configure Enroot paths in enroot.conf"
+  ansible.builtin.blockinfile:
+    path: "{{ pyxis_enroot_config_path }}/enroot.conf"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    block: |
+      # Managed by Ansible (pyxis role)
+      ENROOT_RUNTIME_PATH {{ pyxis_enroot_runtime_path }}
+      ENROOT_DATA_PATH    {{ pyxis_enroot_data_path }}
+      ENROOT_CACHE_PATH   {{ pyxis_enroot_cache_path }}
+  notify:
+    - restart slurmd
+    - restart slurmctld

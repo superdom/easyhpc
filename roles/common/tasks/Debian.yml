@@ -1,0 +1,26 @@
+---
+# Debian/Ubuntu specific tasks
+
+- name: Clean up malformed SLURM repository file if exists
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/slurm-wlm.list
+    state: absent
+  ignore_errors: true
+
+- name: Update system packages
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    cache_valid_time: 3600
+
+- name: Disable UFW (firewall off for EasyHPC)
+  ansible.builtin.shell: |
+    if command -v ufw >/dev/null 2>&1; then
+      ufw --force disable
+    else
+      echo "ufw not installed"
+    fi
+  register: ufw_disable_result
+  changed_when: false
+  failed_when: false
+  when: not (firewall_enabled | default(false) | bool)

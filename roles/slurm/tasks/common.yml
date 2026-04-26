@@ -1,0 +1,198 @@
+---
+# Common setup tasks
+
+- name: Install build dependencies (RedHat)
+  ansible.builtin.yum:
+    name: "{{ slurm_build_dependencies[ansible_facts['os_family']] }}"
+    state: present
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install build dependencies (Debian)
+  ansible.builtin.apt:
+    name: "{{ slurm_build_dependencies[ansible_facts['os_family']] }}"
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == "Debian"
+
+
+- name: Check if Slurm group exists
+  ansible.builtin.command: getent group {{ slurm_user.group }}
+  register: slurm_group_check
+  changed_when: false
+  failed_when: false
+
+- name: Assert Slurm group exists
+  ansible.builtin.assert:
+    that: slurm_group_check.rc == 0
+    fail_msg: "Slurm group '{{ slurm_user.group }}' not found. Run the common role first."
+
+- name: Check if Slurm user exists
+  ansible.builtin.command: getent passwd {{ slurm_user.name }}
+  register: slurm_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Assert Slurm user exists
+  ansible.builtin.assert:
+    that: slurm_user_check.rc == 0
+    fail_msg: "Slurm user '{{ slurm_user.name }}' not found. Run the common role first."
+
+- name: Create Slurm directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0755'
+  loop:
+    - "{{ slurm_spool_dir }}"
+    - "{{ slurm_spool_dir }}/slurmctld"
+    - "{{ slurm_spool_dir }}/slurmd"
+    - "{{ slurm_job_tmp_dir }}"
+    - "{{ slurm_log_dir }}"
+    - "{{ slurm_log_dir }}/archive"
+    - "{{ slurm_config_dir }}"
+    - "{{ slurm_build_dir }}"
+    - "{{ slurm_user.home }}"
+
+- name: Ensure ansible local facts directory exists
+  ansible.builtin.file:
+    path: /etc/ansible/facts.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: "'exec' in node_roles"
+
+- name: Detect GPU count via nvidia-smi
+  ansible.builtin.shell: |
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi -L | wc -l | awk '{print $1}'
+    else
+      echo 0
+    fi
+  register: slurm_gpu_count_raw
+  changed_when: false
+  failed_when: false
+  when:
+    - "'exec' in node_roles"
+    - gpu_count is not defined
+
+- name: Set gpu_count fact from nvidia-smi
+  ansible.builtin.set_fact:
+    gpu_count: "{{ slurm_gpu_count_raw.stdout | int }}"
+  when:
+    - "'exec' in node_roles"
+    - gpu_count is not defined
+    - slurm_gpu_count_raw.stdout is defined
+    - (slurm_gpu_count_raw.stdout | int) > 0
+
+- name: Install NVML development headers (Debian)
+  ansible.builtin.apt:
+    name: "{{ slurm_nvml_dev_packages['Debian'] }}"
+    state: present
+    update_cache: true
+  when:
+    - ansible_facts['os_family'] == "Debian"
+    - slurm_enable_nvml | default(false) | bool
+    - slurm_nvml_dev_packages['Debian'] | length > 0
+
+- name: Gather GPU topology information
+  ansible.builtin.shell: |
+    set -o pipefail
+    python3 - <<'PY'
+        import json
+        import re
+        import subprocess
+        result = []
+        try:
+            output = subprocess.check_output(['nvidia-smi', 'topo', '-m'], text=True)
+        except Exception:
+            output = ''
+        if output:
+            for line in output.splitlines():
+                line = line.strip()
+                if not line.startswith('GPU'):
+                    continue
+                parts = line.split()
+                if len(parts) < 2 or not parts[0].startswith('GPU'):
+                    continue
+                token = parts[0]
+                affinity = parts[-1]
+                if not re.fullmatch(r'[\d,\-]+', affinity):
+                    continue
+                try:
+                    idx = int(token[3:])
+                except ValueError:
+                    continue
+                result.append((idx, affinity))
+            result = [aff for idx, aff in sorted(result, key=lambda item: item[0])]
+        print(json.dumps(result))
+    PY
+  register: slurm_gpu_topology_raw
+  changed_when: false
+  failed_when: false
+  when: "'exec' in node_roles"
+
+- name: Parse GPU topology data
+  ansible.builtin.set_fact:
+    slurm_gpu_topology_entries: >-
+      {{
+        (slurm_gpu_topology_raw.stdout | default('') | trim | length > 0)
+        | ternary(slurm_gpu_topology_raw.stdout | from_json, [])
+      }}
+  when: "'exec' in node_roles"
+
+- name: Calculate CPU topology metrics
+  ansible.builtin.set_fact:
+    slurm_cpu_logical: "{{ ansible_facts['processor_vcpus'] | default(1) | int }}"
+    slurm_cpu_sockets: "{{ ansible_facts['processor_count'] | default(1) | int }}"
+    slurm_cpu_cores_per_socket: "{{ ansible_facts['processor_cores'] | default(ansible_facts['processor_vcpus'] | default(1)) | int }}"
+    slurm_cpu_threads_hint: "{{ ansible_facts['processor_threads_per_core'] | default(0) | int }}"
+  when: "'exec' in node_roles"
+
+- name: Derive CPU threads-per-core
+  ansible.builtin.set_fact:
+    slurm_cpu_total_slots: "{{ (slurm_cpu_sockets | int) * (slurm_cpu_cores_per_socket | int) }}"
+    slurm_cpu_threads_per_core: >-
+      {{
+        slurm_cpu_threads_hint
+        if (slurm_cpu_threads_hint | int) > 0
+        else (
+          (slurm_cpu_logical // slurm_cpu_total_slots)
+          if (slurm_cpu_total_slots | int) > 0
+          else 1
+        )
+      }}
+  when: "'exec' in node_roles"
+
+- name: Build topology fact payload
+  ansible.builtin.set_fact:
+    slurm_topology_fact:
+      cpu_topology:
+        logical_cpus: "{{ slurm_cpu_logical | int }}"
+        sockets: "{{ slurm_cpu_sockets | int }}"
+        cores_per_socket: "{{ slurm_cpu_cores_per_socket | int }}"
+        threads_per_core: "{{ (slurm_cpu_threads_per_core | int) | default(1) }}"
+      gpu_topology: "{{ slurm_gpu_topology_entries | default([]) }}"
+  when: "'exec' in node_roles"
+
+- name: Write topology fact for local node
+  ansible.builtin.copy:
+    dest: /etc/ansible/facts.d/topology.fact
+    content: "{{ slurm_topology_fact | to_nice_json }}"
+    mode: '0644'
+  when:
+    - "'exec' in node_roles"
+    - slurm_topology_fact is defined
+
+- name: Refresh ansible local facts
+  ansible.builtin.setup:
+    filter: ansible_local
+  when: "'exec' in node_roles"
+
+- name: Ensure munge is installed and running
+  ansible.builtin.systemd:
+    name: munge
+    enabled: true
+    state: started

@@ -1,0 +1,4 @@
+---
+# Handlers for HA SLURM
+# Note: Keepalived + HAProxy handlers removed as they are managed at network level
+

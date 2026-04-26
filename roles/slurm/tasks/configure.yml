@@ -1,0 +1,172 @@
+---
+# Configuration tasks
+
+- name: Merge slurm.conf defaults with overrides
+  ansible.builtin.set_fact:
+    slurm_config: "{{ slurm_config_defaults | combine(slurm_config | default({}), recursive=True) }}"
+  when: slurm_config_defaults is defined
+
+- name: Determine configless mode
+  ansible.builtin.set_fact:
+    slurm_configless_enabled: >-
+      {{
+        slurm_configless_enabled
+        | default(
+            ('enable_configless' in (slurm_config.SlurmdParameters | default('')))
+            and ('enable_configless' in (slurm_config.SlurmctldParameters | default('')))
+          )
+      }}
+  when: "'controller' in node_roles or 'exec' in node_roles or 'login' in node_roles"
+
+- name: Deploy slurmd systemd unit with configless conf-server
+  ansible.builtin.template:
+    src: slurmd.service.j2
+    dest: /etc/systemd/system/slurmd.service
+    mode: '0644'
+  register: slurmd_unit
+  when: "'exec' in node_roles"
+  notify: restart slurmd
+
+- name: Reload systemd daemon for slurmd unit
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - "'exec' in node_roles"
+    - slurmd_unit is defined
+    - slurmd_unit.changed | default(false)
+
+- name: Ensure StateSaveLocation exists (controller)
+  ansible.builtin.file:
+    path: "{{ slurm_state_save_location | default(slurm_config.StateSaveLocation | default(slurm_spool_dir + '/slurmctld')) }}"
+    state: directory
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0700'
+  when: "'controller' in node_roles"
+
+- name: Generate slurm.conf (local on controllers/login or exec non-configless)
+  ansible.builtin.template:
+    src: slurm.conf.j2
+    dest: "{{ slurm_config_dir }}/slurm.conf"
+    mode: '0644'
+  notify:
+    - reload slurm
+    - restart slurmd
+  when:
+    - "'controller' in node_roles or 'login' in node_roles or ('exec' in node_roles and not (slurm_configless_enabled | default(false) | bool))"
+
+- name: Generate slurm.conf (configless stub on exec nodes)
+  ansible.builtin.template:
+    src: slurm.conf.configless.j2
+    dest: "{{ slurm_config_dir }}/slurm.conf"
+    mode: '0644'
+  notify: restart slurmd
+  when:
+    - "'exec' in node_roles"
+    - slurm_configless_enabled | default(false) | bool
+
+- name: Check for legacy cgroup.conf symlink on exec nodes
+  ansible.builtin.stat:
+    path: "{{ slurm_config_dir }}/cgroup.conf"
+  register: cgroup_conf_link
+  when: "'exec' in node_roles"
+
+- name: Remove legacy cgroup.conf symlink on exec nodes
+  ansible.builtin.file:
+    path: "{{ slurm_config_dir }}/cgroup.conf"
+    state: absent
+  when:
+    - "'exec' in node_roles"
+    - cgroup_conf_link.stat.islnk | default(false)
+
+- name: Generate cgroup.conf (exec nodes + configless controllers)
+  ansible.builtin.template:
+    src: cgroup.conf.j2
+    dest: "{{ slurm_config_dir }}/cgroup.conf"
+    mode: '0644'
+  notify:
+    - reload slurm
+    - restart slurmd
+  when:
+    - "'exec' in node_roles or ((slurm_configless_enabled | default(false) | bool) and ('controller' in node_roles))"
+
+- name: Ensure prolog/epilog directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ slurm_run_parts_path | dirname }}"
+    - "{{ slurm_prolog_dir }}"
+    - "{{ slurm_epilog_dir }}"
+  when: "'exec' in node_roles"
+
+- name: Deploy prolog/epilog wrapper scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+  loop:
+    - { src: "run-parts.sh.j2", dest: "{{ slurm_run_parts_path }}" }
+    - { src: "prolog.sh.j2", dest: "{{ slurm_prolog_path }}" }
+    - { src: "epilog.sh.j2", dest: "{{ slurm_epilog_path }}" }
+  when: "'exec' in node_roles"
+  notify: restart slurmd
+
+- name: Deploy prolog scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ slurm_prolog_dir }}/{{ item.name }}"
+    mode: '0755'
+  loop:
+    - { src: "prolog.d/10_gpu_health_check.sh.j2", name: "10_gpu_health_check.sh" }
+    - { src: "prolog.d/20_prepare_enroot_dirs.sh.j2", name: "20_prepare_enroot_dirs.sh" }
+  when: "'exec' in node_roles"
+  notify: restart slurmd
+
+- name: Deploy epilog scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ slurm_epilog_dir }}/{{ item.name }}"
+    mode: '0755'
+  loop:
+    - { src: "epilog.d/10_cleanup_enroot.sh.j2", name: "10_cleanup_enroot.sh" }
+    - { src: "epilog.d/20_cleanup_job_tmpdir.sh.j2", name: "20_cleanup_job_tmpdir.sh" }
+  when: "'exec' in node_roles"
+  notify: restart slurmd
+
+- name: Generate gres.conf (exec/controller nodes)
+  ansible.builtin.template:
+    src: gres.conf.j2
+    dest: "{{ slurm_config_dir }}/gres.conf"
+    mode: '0644'
+  notify:
+    - reload slurm
+    - restart slurmd
+  when: "'exec' in node_roles or 'controller' in node_roles"
+
+- name: Generate slurmdbd.conf
+  ansible.builtin.template:
+    src: slurmdbd.conf.j2
+    dest: "{{ slurm_config_dir }}/slurmdbd.conf"
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0600'
+  notify: restart slurmdbd
+  when:
+    - ('dbd' in node_roles) or (('controller' in node_roles) and (inventory_hostname == (groups['slurm-controller'][0] | default(''))) and slurm_accounting_enabled)
+    - slurm_accounting_enabled
+
+- name: Create systemd service files
+  ansible.builtin.template:
+    src: "{{ item }}.service.j2"
+    dest: "/etc/systemd/system/{{ item }}.service"
+    mode: '0644'
+  loop:
+    - "slurmctld"
+    - "slurmd"
+    - "slurmdbd"
+  when: item in (['slurmctld'] if 'controller' in node_roles else []) + (['slurmd'] if 'exec' in node_roles else []) + (['slurmdbd'] if (slurm_accounting_enabled and (('dbd' in node_roles) or (('controller' in node_roles) and (inventory_hostname == (groups['slurm-controller'][0] | default('')))))) else [])
+  notify: reload systemd

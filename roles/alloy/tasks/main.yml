@@ -1,0 +1,220 @@
+---
+- name: Install and configure Alloy
+  when: alloy_enabled | bool
+  block:
+    - name: Ensure unzip is installed
+      ansible.builtin.package:
+        name: unzip
+        state: present
+
+    - name: Determine Alloy architecture
+      ansible.builtin.set_fact:
+        alloy_arch: "{{ alloy_arch_map[ansible_facts['architecture']] | default('') }}"
+
+    - name: Fail if architecture is unsupported
+      ansible.builtin.fail:
+        msg: "Unsupported architecture for Alloy: {{ ansible_facts['architecture'] }}"
+      when: alloy_arch == ''
+
+    - name: Set Alloy download paths
+      ansible.builtin.set_fact:
+        alloy_archive_name: "alloy-linux-{{ alloy_arch }}.zip"
+        alloy_download_url: "https://github.com/grafana/alloy/releases/download/v{{ alloy_version }}/alloy-linux-{{ alloy_arch }}.zip"
+        alloy_extract_dir: "{{ alloy_download_dir }}/alloy-{{ alloy_version }}-{{ alloy_arch }}"
+
+    - name: Ensure Alloy group exists
+      ansible.builtin.group:
+        name: "{{ alloy_user.group }}"
+        gid: "{{ alloy_user.gid }}"
+        system: true
+
+    - name: Ensure Alloy user exists
+      ansible.builtin.user:
+        name: "{{ alloy_user.name }}"
+        uid: "{{ alloy_user.uid }}"
+        group: "{{ alloy_user.group }}"
+        home: "{{ alloy_user.home }}"
+        shell: "{{ alloy_user.shell }}"
+        comment: "{{ alloy_user.comment }}"
+        system: true
+        create_home: false
+
+    - name: Set Alloy node role
+      ansible.builtin.set_fact:
+        alloy_node_role: >-
+          {{ 'controller' if (is_slurm_controller | default(false))
+             else 'compute' if (is_slurm_compute | default(false))
+             else 'login' if (is_slurm_login | default(false))
+             else 'other' }}
+
+    - name: Resolve syslog paths
+      ansible.builtin.set_fact:
+        alloy_syslog_paths_resolved: "{{ alloy_syslog_paths.get(ansible_facts['os_family'], []) }}"
+
+    - name: Check syslog files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: syslog_file_stats
+      loop: "{{ alloy_syslog_paths_resolved }}"
+      when:
+        - alloy_syslog_source == 'file'
+        - alloy_syslog_paths_resolved | length > 0
+
+    - name: Ensure ACL tooling is installed for syslog access
+      ansible.builtin.package:
+        name: acl
+        state: present
+      when:
+        - alloy_syslog_source == 'file'
+        - syslog_file_stats is defined
+        - syslog_file_stats.results | selectattr('stat.exists', 'eq', true) | list | length > 0
+
+    - name: Allow Alloy to read syslog files
+      ansible.builtin.command: setfacl -m u:{{ alloy_user.name }}:r {{ item.stat.path }}
+      loop: "{{ syslog_file_stats.results }}"
+      when:
+        - alloy_syslog_source == 'file'
+        - syslog_file_stats is defined
+        - item.stat.exists
+
+    - name: Set SLURM log collection flag
+      ansible.builtin.set_fact:
+        alloy_slurm_enabled: "{{ (is_slurm_controller | default(false)) or (is_slurm_compute | default(false)) }}"
+
+    - name: Check Slurm log directory
+      ansible.builtin.stat:
+        path: "{{ alloy_slurm_log_dir }}"
+      register: slurm_log_dir_stat
+      when: alloy_slurm_enabled | bool
+
+    - name: Ensure ACL tooling is installed
+      ansible.builtin.package:
+        name: acl
+        state: present
+      when:
+        - alloy_slurm_enabled | bool
+        - slurm_log_dir_stat.stat.exists
+
+    - name: Allow Alloy to traverse Slurm log directory
+      ansible.builtin.command: setfacl -m u:{{ alloy_user.name }}:rX {{ alloy_slurm_log_dir }}
+      when:
+        - alloy_slurm_enabled | bool
+        - slurm_log_dir_stat.stat.exists
+
+    - name: Set default ACL for new Slurm log files
+      ansible.builtin.command: setfacl -d -m u:{{ alloy_user.name }}:rX {{ alloy_slurm_log_dir }}
+      when:
+        - alloy_slurm_enabled | bool
+        - slurm_log_dir_stat.stat.exists
+
+    - name: Find Slurm log files
+      ansible.builtin.find:
+        paths: "{{ alloy_slurm_log_dir }}"
+        file_type: file
+        patterns:
+          - "*.log"
+          - "jobcomp"
+      register: slurm_log_files
+      when:
+        - alloy_slurm_enabled | bool
+        - slurm_log_dir_stat.stat.exists
+
+    - name: Ensure Alloy can read Slurm log files
+      ansible.builtin.command: setfacl -m u:{{ alloy_user.name }}:r {{ item.path }}
+      loop: "{{ slurm_log_files.files }}"
+      when:
+        - alloy_slurm_enabled | bool
+        - slurm_log_dir_stat.stat.exists
+
+    - name: Build candidate supplementary groups
+      ansible.builtin.set_fact:
+        alloy_candidate_groups: >-
+          {{ ['systemd-journal', 'slurm'] + (['adm'] if ansible_facts['os_family'] == 'Debian' else []) }}
+
+    - name: Check supplemental groups
+      ansible.builtin.command: getent group {{ item }}
+      register: alloy_group_checks
+      changed_when: false
+      failed_when: false
+      loop: "{{ alloy_candidate_groups }}"
+
+    - name: Set supplemental groups
+      ansible.builtin.set_fact:
+        alloy_supplementary_groups: "{{ alloy_group_checks.results | selectattr('rc', 'eq', 0) | map(attribute='item') | list }}"
+
+    - name: Update Alloy supplementary groups
+      ansible.builtin.user:
+        name: "{{ alloy_user.name }}"
+        groups: "{{ alloy_supplementary_groups }}"
+        append: true
+      when: alloy_supplementary_groups | length > 0
+
+    - name: Create Alloy directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ alloy_config_dir }}"
+          owner: root
+          group: root
+          mode: "0755"
+        - path: "{{ alloy_data_dir }}"
+          owner: "{{ alloy_user.name }}"
+          group: "{{ alloy_user.group }}"
+          mode: "0750"
+
+    - name: Download Alloy archive
+      ansible.builtin.get_url:
+        url: "{{ alloy_download_url }}"
+        dest: "{{ alloy_download_dir }}/{{ alloy_archive_name }}"
+        mode: "0644"
+
+    - name: Ensure Alloy extract directory exists
+      ansible.builtin.file:
+        path: "{{ alloy_extract_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract Alloy archive
+      ansible.builtin.unarchive:
+        src: "{{ alloy_download_dir }}/{{ alloy_archive_name }}"
+        dest: "{{ alloy_extract_dir }}"
+        remote_src: true
+        creates: "{{ alloy_extract_dir }}/alloy-linux-{{ alloy_arch }}"
+
+    - name: Install Alloy binary
+      ansible.builtin.copy:
+        src: "{{ alloy_extract_dir }}/alloy-linux-{{ alloy_arch }}"
+        dest: "{{ alloy_bin_path }}"
+        mode: "0755"
+        remote_src: true
+      notify: restart alloy
+
+    - name: Deploy Alloy configuration
+      ansible.builtin.template:
+        src: config.alloy.j2
+        dest: "{{ alloy_config_file }}"
+        owner: root
+        group: "{{ alloy_user.group }}"
+        mode: "0640"
+      notify: restart alloy
+
+    - name: Install Alloy systemd unit
+      ansible.builtin.template:
+        src: alloy.service.j2
+        dest: /etc/systemd/system/alloy.service
+        mode: "0644"
+      notify: restart alloy
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Ensure Alloy service is running
+      ansible.builtin.systemd:
+        name: alloy
+        state: started
+        enabled: true

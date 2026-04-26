@@ -1,0 +1,65 @@
+---
+# High Availability SLURM Role (slurmctld)
+# This role validates prerequisites for SlurmctldHost-based HA.
+
+- name: Assert HA prerequisites (controller count)
+  ansible.builtin.assert:
+    that:
+      - groups['slurm-controller'] is defined
+      - (groups['slurm-controller'] | length) >= 2
+    fail_msg: "slurm_ha_enabled=true requires at least 2 hosts in the [slurm-controller] inventory group."
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+  run_once: true
+
+- name: Assert HA prerequisites (shared storage)
+  ansible.builtin.assert:
+    that:
+      - slurm_state_save_location is defined
+      - (slurm_state_save_location | length) > 0
+    fail_msg: "slurm_ha_enabled=true requires slurm_state_save_location to be set."
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+  run_once: true
+
+- name: Ensure HA state path exists
+  ansible.builtin.file:
+    path: "{{ slurm_state_save_location }}"
+    state: directory
+    owner: "{{ slurm_user.name }}"
+    group: "{{ slurm_user.group }}"
+    mode: '0700'
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+
+- name: Check HA state path is mounted
+  ansible.builtin.command: "findmnt -rn -o TARGET -T {{ slurm_state_save_location }}"
+  register: slurm_state_mount_check
+  changed_when: false
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+
+- name: Assert HA state path is mounted
+  ansible.builtin.assert:
+    that:
+      - (slurm_state_mount_check.stdout | length) > 0
+      - slurm_state_mount_check.stdout != "/"
+    fail_msg: "StateSaveLocation must be on a mounted filesystem (not /)."
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+
+- name: Show effective HA configuration
+  ansible.builtin.debug:
+    msg:
+      - "HA enabled: {{ slurm_ha_enabled | default(false) | bool }}"
+      - "Controllers: {{ groups['slurm-controller'] | default([]) }}"
+      - "StateSaveLocation: {{ slurm_state_save_location }}"
+  when:
+    - slurm_ha_enabled | default(false) | bool
+    - "'slurm-controller' in group_names"
+  run_once: true

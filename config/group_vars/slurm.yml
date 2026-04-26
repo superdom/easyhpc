@@ -1,0 +1,90 @@
+---
+# SLURM build/install and SLURM-dependent tools
+
+# Core SLURM installation
+slurm_version: "25.05.0"
+slurm_install_prefix: "/usr/local"
+
+# SLURM ports (can be overridden per environment)
+slurm_controller_port: 6817
+slurm_node_port: 6818
+slurm_dbd_port: 6819
+
+# High Availability (defaults in roles/ha-slurm/defaults/main.yml)
+ha_enabled: true
+
+# slurmctld state must live on shared storage for HA.
+# Default: use shared_storage_mount when HA is enabled.
+slurm_state_save_location_ha: "{{ shared_storage_mount }}/.slurm_state"
+
+# Accounting configuration (defaults in roles/slurm/defaults/main.yml)
+slurm_accounting_enabled: true
+
+# Database configuration (slurm-mysql role)
+slurm_db_config:
+  StorageType: "accounting_storage/mysql"
+  StorageHost: "127.0.0.1"
+  StoragePort: "3306"
+  StorageUser: "{{ slurm_user.name }}"
+  StoragePass: "{{ mysql_password | default('slurm_password_change_me') }}"
+  StorageLoc: "{{ mysql_database | default('slurm_acct_db') }}"
+  DbdHost: "localhost"
+  DbdAddr: "127.0.0.1"
+  DebugLevel: "info"
+  LogFile: "{{ slurm_log_dir }}/slurmdbd.log"
+  PidFile: "{{ slurm_run_dir }}/slurmdbd.pid"
+  PurgeEventAfter: 2days
+  PurgeJobAfter: 30days
+  PurgeStepAfter: 7days
+
+# MySQL container configuration (for slurm-mysql role)
+mysql_password: "slurm_password_change_me"
+mysql_database: "slurm_acct_db"
+
+# HWLOC build configuration (defaults in roles/hwloc/defaults/main.yml)
+hwloc_version: "2.12.2"
+hwloc_install_prefix: "/opt/hpc/stack/hwloc"
+hwloc_force_rebuild: false
+
+# PMIx build configuration (defaults in roles/pmix/defaults/main.yml)
+pmix_version: "4.2.9"
+pmix_install_prefix: "/opt/hpc/stack/pmix"
+pmix_force_rebuild: false
+
+# Main slurm.conf configuration
+# Role defaults are merged in roles/slurm/tasks/configure.yml.
+slurm_config:
+  ClusterName: "{{ cluster_name | default('easyhpc-cluster') }}"
+  SlurmctldParameters: "enable_configless"
+  SlurmdParameters: "enable_configless"
+  SchedulerType: "sched/backfill"
+  SelectType: "select/cons_tres"
+  SelectTypeParameters: "CR_CPU"
+  ProctrackType: "proctrack/cgroup"
+  TaskPlugin: "task/affinity,task/cgroup"
+  JobAcctGatherType: "jobacct_gather/cgroup"
+  JobAcctGatherFrequency: 30
+  GresTypes: "gpu"
+
+# Partition configuration
+slurm_partitions:
+  - name: "compute"
+    Nodes: "ALL"
+    Default: "YES"
+    MaxTime: "UNLIMITED"
+    Priority: 100
+    State: "UP"
+
+# Lmod configuration (defaults in roles/lmod/defaults/main.yml)
+lmod_enabled: true
+lmod_version: "9.0.4"
+
+# Node Health Check (defaults in roles/nhc/defaults/main.yml)
+nhc_enabled: true
+nhc_check_interval: 300
+
+# EasyBuild integration (defaults in roles/easybuild/defaults/main.yml)
+# Core module tree defaults live in group_vars/all.yml
+easybuild_enabled: false
+easybuild_version: "5.2.0"
+easybuild_easyconfigs_version: "develop"

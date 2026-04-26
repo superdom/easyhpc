@@ -1,0 +1,23 @@
+[Unit]
+Description=Grafana Alloy Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ alloy_user.name }}
+Group={{ alloy_user.group }}
+{% if alloy_supplementary_groups is defined and (alloy_supplementary_groups | length) > 0 %}
+SupplementaryGroups={{ alloy_supplementary_groups | join(' ') }}
+{% endif %}
+ExecStart={{ alloy_bin_path }} run --storage.path={{ alloy_data_dir }} --server.http.listen-addr={{ alloy_http_listen_addr }} {{ alloy_config_file }}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths={{ alloy_data_dir }}
+ReadOnlyPaths=/var/log /run/log/journal /var/log/journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,34 @@
+---
+- name: "Include OS-specific vars for Pyxis"
+  ansible.builtin.include_vars:
+    file: "{{ lookup('first_found', pyxis_vars_files) }}"
+  vars:
+    pyxis_vars_files:
+      files:
+        - "{{ ansible_facts['os_family'] }}.yml"
+        - "Debian.yml"
+      paths:
+        - "{{ role_path }}/vars"
+  tags: [pyxis]
+
+- name: "Skip pyxis role if pyxis_enabled is false"
+  ansible.builtin.meta: end_host
+  when: not pyxis_enabled
+  tags: [pyxis]
+
+- name: "Install Pyxis and Enroot"
+  ansible.builtin.import_tasks: install.yml
+  tags: [pyxis, pyxis_install]
+
+- name: "Configure Enroot runtime/cache directories and config"
+  ansible.builtin.import_tasks: config.yml
+  when: pyxis_manage_enroot_dirs
+  tags: [pyxis, pyxis_config]
+
+- name: "Configure Slurm plugstack and pyxis plugin"
+  ansible.builtin.import_tasks: slurm.yml
+  tags: [pyxis, pyxis_slurm]
+
+- name: "Validate pyxis integration (lightweight checks)"
+  ansible.builtin.import_tasks: validate.yml
+  tags: [pyxis, pyxis_validate]

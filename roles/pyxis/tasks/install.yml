@@ -1,0 +1,131 @@
+---
+- name: "Check if Enroot binary exists"
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: enroot_binary_check
+  loop:
+    - "/usr/bin/enroot"
+    - "/usr/local/bin/enroot"
+  failed_when: false
+  tags: [pyxis, pyxis_install]
+
+- name: "Check enroot version if binary found"
+  ansible.builtin.command: "{{ item.item }} version"
+  register: enroot_version_check
+  changed_when: false
+  failed_when: false
+  loop: "{{ enroot_binary_check.results }}"
+  when: item.stat.exists
+  tags: [pyxis, pyxis_install]
+
+- name: "Try enroot version command as fallback"
+  ansible.builtin.command: "enroot version"
+  register: enroot_fallback_check
+  changed_when: false
+  failed_when: false
+  when: 
+    - enroot_binary_check.results | selectattr('stat.exists') | list | length == 0
+  tags: [pyxis, pyxis_install]
+
+- name: "Fail if Enroot is not installed"
+  ansible.builtin.fail:
+    msg: "Enroot must be installed before Pyxis. Please run the enroot role first."
+  when: 
+    - enroot_binary_check.results | selectattr('stat.exists') | list | length == 0
+    - enroot_version_check.results | default([]) | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0) | list | length == 0
+    - enroot_fallback_check.rc | default(1) != 0
+  tags: [pyxis, pyxis_install]
+
+- name: "Ensure required packages for building/using Pyxis are installed (Debian)"
+  ansible.builtin.package:
+    name:
+      - make
+      - gcc
+      - libslurm-dev
+    state: present
+  when: 
+    - ansible_facts["os_family"] == "Debian"
+  tags: [pyxis, pyxis_install]
+
+- name: "Ensure required packages for building/using Pyxis are installed (RedHat)"
+  ansible.builtin.package:
+    name:
+      - make
+      - gcc
+      - slurm-devel
+    state: present
+  when: 
+    - ansible_facts["os_family"] == "RedHat"
+  tags: [pyxis, pyxis_install]
+
+- name: "Check if Pyxis source directory exists"
+  ansible.builtin.stat:
+    path: "{{ pyxis_source_dir }}"
+  register: pyxis_source_dir_stat
+  tags: [pyxis, pyxis_install]
+
+- name: "Remove existing Pyxis source directory (force reinstall)"
+  ansible.builtin.file:
+    path: "{{ pyxis_source_dir }}"
+    state: absent
+  when: 
+    - pyxis_force_reinstall | default(false) | bool
+    - pyxis_source_dir_stat.stat.exists | default(false)
+  tags: [pyxis, pyxis_install]
+
+- name: "Checkout Pyxis source"
+  ansible.builtin.git:
+    repo: "{{ pyxis_git_repo }}"
+    dest: "{{ pyxis_source_dir }}"
+    version: "{{ pyxis_git_version }}"
+    update: yes
+    force: yes
+  register: pyxis_git
+  tags: [pyxis, pyxis_install]
+
+- name: "Check if Pyxis build artifact exists"
+  ansible.builtin.stat:
+    path: "{{ pyxis_source_dir }}/spank_pyxis.so"
+  register: pyxis_build_artifact
+  tags: [pyxis, pyxis_install]
+
+- name: "Determine if Pyxis needs build"
+  ansible.builtin.set_fact:
+    pyxis_needs_build: >-
+      {{
+        (pyxis_force_reinstall | default(false) | bool)
+        or (pyxis_git.changed | default(false))
+        or not (pyxis_build_artifact.stat.exists | default(false))
+      }}
+  tags: [pyxis, pyxis_install]
+
+- name: "Build Pyxis from source"
+  ansible.builtin.command:
+    cmd: "make"
+    chdir: "{{ pyxis_source_dir }}"
+  environment:
+    CPPFLAGS: "-I{{ slurm_install_prefix | default('/usr/local') }}/include/slurm"
+  when: pyxis_needs_build | default(false) | bool
+  tags: [pyxis, pyxis_install]
+
+- name: "Ensure SLURM PluginDir exists"
+  ansible.builtin.file:
+    path: "{{ pyxis_spank_module_path }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  tags: [pyxis, pyxis_install]
+
+- name: "Copy pyxis plugin to SLURM PluginDir"
+  ansible.builtin.copy:
+    src: "{{ pyxis_source_dir }}/spank_pyxis.so"
+    dest: "{{ pyxis_spank_module_path }}/spank_pyxis.so"
+    mode: '0755'
+    owner: root
+    group: root
+    remote_src: yes
+  notify:
+    - restart slurmd
+    - restart slurmctld
+  tags: [pyxis, pyxis_install]

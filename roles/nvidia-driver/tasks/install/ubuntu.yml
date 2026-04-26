@@ -1,0 +1,398 @@
+---
+# Install: Ubuntu
+# Note: This file is only included when ansible_facts['distribution'] == 'Ubuntu'
+#       so we don't need to repeat that condition on every task.
+
+# =============================================================================
+# Phase 1: Repository Setup
+# =============================================================================
+- name: Setup CUDA repository
+  block:
+    - name: Set Ubuntu repo identifier
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_repo_id: "ubuntu{{ ansible_facts['distribution_version'] | replace('.', '') }}"
+
+    - name: Set CUDA keyring URL (default)
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_keyring_url_effective: "{{ nvidia_driver_ubuntu_cuda_repo_url }}/{{ nvidia_driver_ubuntu_repo_id }}/x86_64/cuda-keyring_1.1-1_all.deb"
+      when: nvidia_driver_ubuntu_cuda_keyring_url | length == 0
+
+    - name: Set CUDA keyring URL (override)
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_keyring_url_effective: "{{ nvidia_driver_ubuntu_cuda_keyring_url }}"
+      when: nvidia_driver_ubuntu_cuda_keyring_url | length > 0
+
+    - name: Set CUDA keyring path
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_keyring_path: "/tmp/cuda-keyring.deb"
+
+    - name: Download CUDA keyring package
+      ansible.builtin.get_url:
+        url: "{{ nvidia_driver_ubuntu_keyring_url_effective }}"
+        dest: "{{ nvidia_driver_ubuntu_keyring_path }}"
+        mode: '0644'
+      register: cuda_keyring_download
+      retries: 3
+      delay: 5
+      until: cuda_keyring_download is succeeded
+      when: nvidia_driver_ubuntu_keyring_url_effective | length > 0
+
+    - name: Check CUDA keyring file exists
+      ansible.builtin.stat:
+        path: "{{ nvidia_driver_ubuntu_keyring_path }}"
+      register: cuda_keyring_stat
+      when: nvidia_driver_ubuntu_keyring_url_effective | length > 0
+
+    - name: Fail if CUDA keyring file is missing
+      ansible.builtin.fail:
+        msg: "CUDA keyring file not found at {{ nvidia_driver_ubuntu_keyring_path }}. Check download URL and network access."
+      when:
+        - nvidia_driver_ubuntu_keyring_url_effective | length > 0
+        - not ansible_check_mode
+        - cuda_keyring_stat.stat.exists is defined
+        - not cuda_keyring_stat.stat.exists
+
+    - name: Install CUDA keyring package
+      ansible.builtin.apt:
+        deb: "{{ nvidia_driver_ubuntu_keyring_path }}"
+        state: present
+      when:
+        - nvidia_driver_ubuntu_keyring_url_effective | length > 0
+        - not ansible_check_mode
+        - cuda_keyring_stat.stat.exists | default(false)
+
+    - name: Update apt cache after adding repository
+      ansible.builtin.apt:
+        update_cache: true
+  when: nvidia_driver_use_official_repo
+
+# =============================================================================
+# Phase 2: Driver Branch Detection (for strategy=latest)
+# =============================================================================
+- name: Detect latest driver branch
+  block:
+    - name: Detect latest available NVIDIA driver branch
+      ansible.builtin.shell: >-
+        apt-cache search '^nvidia-driver-[0-9]+-server' | awk '{print $1}' |
+        sed -E 's/^nvidia-driver-([0-9]+)-server/\\1/' | sort -n | tail -n1
+      register: nvidia_driver_latest_branch
+      changed_when: false
+
+    - name: Set effective driver branch to latest
+      ansible.builtin.set_fact:
+        nvidia_driver_branch_effective: "{{ nvidia_driver_latest_branch.stdout }}"
+        nvidia_driver_branch_int: "{{ (nvidia_driver_latest_branch.stdout | default('0')) | int }}"
+      when: nvidia_driver_latest_branch.stdout | default('') | length > 0
+
+    - name: Warn if latest driver branch could not be determined
+      ansible.builtin.debug:
+        msg: "WARNING: Could not determine latest NVIDIA driver branch from apt-cache; falling back to nvidia_driver_branch={{ nvidia_driver_branch }}."
+      when: nvidia_driver_latest_branch.stdout | default('') | length == 0
+  when: nvidia_driver_strategy == 'latest'
+
+# =============================================================================
+# Phase 3: Package Name Setup
+# =============================================================================
+- name: Set Ubuntu server package base facts
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_datacenter_gpu: "{{ (nvidia_gpu_class | default('')) in ['a100', 'h100', 'b200'] }}"
+    nvidia_driver_ubuntu_driver_pkg_name: "nvidia-driver-{{ nvidia_driver_branch_effective }}-server"
+    nvidia_driver_ubuntu_compute_utils_pkg_name: "nvidia-compute-utils-{{ nvidia_driver_branch_effective }}-server"
+    nvidia_driver_ubuntu_fabricmanager_pkg_name: "nvidia-fabricmanager-{{ nvidia_driver_branch_effective }}"
+    nvidia_driver_ubuntu_nscq_pkg_name: "libnvidia-nscq-{{ nvidia_driver_branch_effective }}"
+    nvidia_driver_ubuntu_dep_pkg_names:
+      - "nvidia-kernel-common-{{ nvidia_driver_branch_effective }}-server"
+      - "nvidia-kernel-source-{{ nvidia_driver_branch_effective }}-server"
+      - "nvidia-dkms-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-common-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-gl-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-compute-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-extra-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-decode-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-encode-{{ nvidia_driver_branch_effective }}-server"
+      - "nvidia-utils-{{ nvidia_driver_branch_effective }}-server"
+      - "xserver-xorg-video-nvidia-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-cfg1-{{ nvidia_driver_branch_effective }}-server"
+      - "libnvidia-fbc1-{{ nvidia_driver_branch_effective }}-server"
+
+# =============================================================================
+# Phase 4: Version Pinning (for strategy=specific)
+# =============================================================================
+- name: Handle specific version pinning
+  block:
+    - name: Build list of packages to pin
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_versioned_packages: >-
+          {{
+            [nvidia_driver_ubuntu_driver_pkg_name]
+            + ([nvidia_driver_ubuntu_compute_utils_pkg_name] if nvidia_driver_persistence_mode else [])
+            + ([nvidia_driver_ubuntu_fabricmanager_pkg_name] if (nvidia_fabric_manager_enabled and nvidia_nvswitch_required) else [])
+            + ([nvidia_driver_ubuntu_nscq_pkg_name] if (nvidia_driver_ubuntu_datacenter_gpu or nvidia_nvswitch_required) else [])
+            + (nvidia_driver_ubuntu_dep_pkg_names | default([]))
+          }}
+
+    - name: Select base driver version from nvidia-kernel-common
+      ansible.builtin.shell: >-
+        apt-cache madison nvidia-kernel-common-{{ nvidia_driver_branch_effective }}-server | awk '{print $3}' | awk -v p="{{ nvidia_driver_version }}" 'index($0,p)==1 {print $0; exit}'
+      register: nvidia_driver_ubuntu_base_version
+      changed_when: false
+
+    - name: Fail if base driver version not found
+      ansible.builtin.fail:
+        msg: "No base version matching {{ nvidia_driver_version }} found for nvidia-kernel-common-{{ nvidia_driver_branch_effective }}-server."
+      when: nvidia_driver_ubuntu_base_version.stdout | default('') | length == 0
+
+    - name: Verify base version exists for required packages
+      ansible.builtin.shell: >-
+        apt-cache madison {{ item }} | awk '{print $3}' | grep -x "{{ nvidia_driver_ubuntu_base_version.stdout }}"
+      register: nvidia_driver_ubuntu_version_query
+      changed_when: false
+      loop: "{{ nvidia_driver_ubuntu_versioned_packages | default([]) }}"
+
+    - name: Unhold NVIDIA packages before downgrade
+      ansible.builtin.shell: |
+        holds=$(apt-mark showhold | grep -E '^(nvidia|libnvidia|xserver-xorg-video-nvidia)' || true)
+        if [ -n "$holds" ]; then
+          echo "$holds" | xargs -r apt-mark unhold
+        fi
+        echo "$holds"
+      register: nvidia_driver_unhold
+      changed_when: nvidia_driver_unhold.stdout | length > 0
+      when: nvidia_driver_allow_downgrade | default(false)
+
+    - name: Build version map
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_version_map: "{{ dict(nvidia_driver_ubuntu_version_query.results | map(attribute='item') | zip(nvidia_driver_ubuntu_version_query.results | map(attribute='stdout') | list)) }}"
+
+    - name: Fail if any required package version is missing
+      ansible.builtin.assert:
+        that:
+          - (nvidia_driver_ubuntu_version_map[item] | default('') | length) > 0
+        fail_msg: "Package {{ item }} does not provide version {{ nvidia_driver_ubuntu_base_version.stdout }}. Cannot keep stack in sync."
+      loop: "{{ nvidia_driver_ubuntu_versioned_packages | default([]) }}"
+
+    - name: Build versioned package specs
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_versioned_pkg_specs: >-
+          {%- set specs = [] -%}
+          {%- for pkg in (nvidia_driver_ubuntu_versioned_packages | default([])) -%}
+          {%- set _ = specs.append(pkg ~ '=' ~ nvidia_driver_ubuntu_base_version.stdout) -%}
+          {%- endfor -%}
+          {{ specs }}
+
+    - name: Select package versions (specific)
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_driver_pkg: "{{ nvidia_driver_ubuntu_driver_pkg_name ~ '=' ~ nvidia_driver_ubuntu_version_map.get(nvidia_driver_ubuntu_driver_pkg_name, '') }}"
+        nvidia_driver_ubuntu_compute_utils_pkg: "{{ (nvidia_driver_ubuntu_compute_utils_pkg_name ~ '=' ~ nvidia_driver_ubuntu_version_map.get(nvidia_driver_ubuntu_compute_utils_pkg_name, '')) if nvidia_driver_persistence_mode else nvidia_driver_ubuntu_compute_utils_pkg_name }}"
+        nvidia_driver_ubuntu_fabricmanager_pkg: "{{ (nvidia_driver_ubuntu_fabricmanager_pkg_name ~ '=' ~ nvidia_driver_ubuntu_version_map.get(nvidia_driver_ubuntu_fabricmanager_pkg_name, '')) if (nvidia_fabric_manager_enabled and nvidia_nvswitch_required) else nvidia_driver_ubuntu_fabricmanager_pkg_name }}"
+        nvidia_driver_ubuntu_nscq_pkg: "{{ (nvidia_driver_ubuntu_nscq_pkg_name ~ '=' ~ nvidia_driver_ubuntu_version_map.get(nvidia_driver_ubuntu_nscq_pkg_name, '')) if (nvidia_driver_ubuntu_datacenter_gpu or nvidia_nvswitch_required) else nvidia_driver_ubuntu_nscq_pkg_name }}"
+  when: nvidia_driver_strategy == 'specific'
+
+# Set package versions for non-specific strategy
+- name: Select package versions (non-specific)
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_driver_pkg: "{{ nvidia_driver_ubuntu_driver_pkg_name }}"
+    nvidia_driver_ubuntu_compute_utils_pkg: "{{ nvidia_driver_ubuntu_compute_utils_pkg_name }}"
+    nvidia_driver_ubuntu_fabricmanager_pkg: "{{ nvidia_driver_ubuntu_fabricmanager_pkg_name }}"
+    nvidia_driver_ubuntu_nscq_pkg: "{{ nvidia_driver_ubuntu_nscq_pkg_name }}"
+  when: nvidia_driver_strategy != 'specific'
+
+# =============================================================================
+# Phase 5: Kernel Modules Package Selection
+# =============================================================================
+- name: Determine whether to use prebuilt kernel modules
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_use_kernel_modules_effective: "{{ nvidia_driver_ubuntu_use_kernel_modules and not (nvidia_driver_strategy == 'specific' and (nvidia_driver_allow_downgrade | default(false))) }}"
+
+- name: Select kernel modules package
+  block:
+    - name: Discover linux-modules-nvidia packages
+      ansible.builtin.shell: "apt-cache --names-only search '^linux-modules-nvidia-{{ nvidia_driver_branch_effective }}-server'"
+      register: nvidia_driver_ubuntu_modules_search
+      changed_when: false
+
+    - name: Select linux-modules-nvidia package
+      ansible.builtin.set_fact:
+        nvidia_driver_ubuntu_module_package: >-
+          {%- set pkgs = (nvidia_driver_ubuntu_modules_search.stdout_lines | default([]))
+             | map('regex_replace', ' .*', '') | list -%}
+          {%- set kernel = ansible_facts['kernel'] -%}
+          {%- set exact = pkgs | select('search', kernel) | list -%}
+          {%- set generic = pkgs | select('search', 'generic') | list -%}
+          {%- set server = pkgs | select('match', '^linux-modules-nvidia-' ~ nvidia_driver_branch_effective ~ '-server$') | list -%}
+          {%- set server_nvidia = pkgs | select('match', '^linux-modules-nvidia-' ~ nvidia_driver_branch_effective ~ '-server-nvidia$') | list -%}
+          {{ (exact[0] if exact | length > 0 else (generic[0] if generic | length > 0 else (server[0] if server | length > 0 else (server_nvidia[0] if server_nvidia | length > 0 else '')))) }}
+
+    - name: Fail if linux-modules-nvidia package not found
+      ansible.builtin.fail:
+        msg: "No linux-modules-nvidia package found for branch {{ nvidia_driver_branch_effective }}. Check repo or branch."
+      when: nvidia_driver_ubuntu_module_package | default('') | length == 0
+  when: nvidia_driver_ubuntu_use_kernel_modules_effective | default(true)
+
+- name: Skip linux-modules-nvidia package
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_module_package: ""
+  when: not (nvidia_driver_ubuntu_use_kernel_modules_effective | default(true))
+
+# =============================================================================
+# Phase 6: Cleanup and Package List Assembly
+# =============================================================================
+- name: Cleanup keyring package
+  ansible.builtin.file:
+    path: "{{ nvidia_driver_ubuntu_keyring_path }}"
+    state: absent
+  when:
+    - nvidia_driver_use_official_repo
+    - not ansible_check_mode
+
+- name: Set server package list
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_packages_primary: >-
+      {{
+        (
+          (nvidia_driver_ubuntu_versioned_pkg_specs | default([]))
+          if (nvidia_driver_strategy == 'specific')
+          else
+          (
+            [nvidia_driver_ubuntu_driver_pkg]
+            + ([nvidia_driver_ubuntu_compute_utils_pkg] if nvidia_driver_persistence_mode else [])
+            + ([nvidia_driver_ubuntu_nscq_pkg] if (nvidia_driver_ubuntu_datacenter_gpu or nvidia_nvswitch_required) else [])
+            + ([nvidia_driver_ubuntu_fabricmanager_pkg] if (nvidia_fabric_manager_enabled and nvidia_nvswitch_required) else [])
+          )
+        )
+        + ([nvidia_driver_ubuntu_module_package] if (nvidia_driver_ubuntu_module_package | default('') | length > 0) else [])
+        + ['nvidia-modprobe']
+        + nvidia_driver_ubuntu_packages_extra
+      }}
+    nvidia_driver_ubuntu_packages_fallback: >-
+      {{
+        (
+          (nvidia_driver_ubuntu_versioned_pkg_specs | default([]))
+          if (nvidia_driver_strategy == 'specific')
+          else
+          (
+            [nvidia_driver_ubuntu_driver_pkg]
+            + ([nvidia_driver_ubuntu_compute_utils_pkg] if nvidia_driver_persistence_mode else [])
+            + ([nvidia_driver_ubuntu_fabricmanager_pkg] if (nvidia_fabric_manager_enabled and nvidia_nvswitch_required) else [])
+          )
+        )
+        + ([nvidia_driver_ubuntu_module_package] if (nvidia_driver_ubuntu_module_package | default('') | length > 0) else [])
+        + ['nvidia-modprobe']
+        + nvidia_driver_ubuntu_packages_extra
+      }}
+
+# =============================================================================
+# Phase 7: Package Installation
+# =============================================================================
+- name: Install NVIDIA driver packages
+  block:
+    - name: Install primary NVIDIA driver packages
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_ubuntu_packages_primary }}"
+        state: "{{ nvidia_driver_package_state }}"
+        update_cache: true
+        allow_downgrade: "{{ nvidia_driver_allow_downgrade }}"
+      register: nvidia_driver_install
+      retries: 3
+      delay: 10
+      until: nvidia_driver_install is succeeded
+  rescue:
+    - name: Warn and retry with fallback package set
+      ansible.builtin.debug:
+        msg: "Primary package set failed; retrying with fallback packages."
+
+    - name: Install fallback NVIDIA driver packages
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_ubuntu_packages_fallback }}"
+        state: "{{ nvidia_driver_package_state }}"
+        update_cache: true
+        allow_downgrade: "{{ nvidia_driver_allow_downgrade }}"
+      register: nvidia_driver_install
+      retries: 3
+      delay: 10
+      until: nvidia_driver_install is succeeded
+
+# =============================================================================
+# Phase 8: Package Version Lock
+# =============================================================================
+- name: Handle package version locking
+  block:
+    - name: Get current held packages
+      ansible.builtin.command: apt-mark showhold
+      register: nvidia_driver_ubuntu_hold_list
+      changed_when: false
+
+    - name: Hold NVIDIA driver packages
+      ansible.builtin.command: "apt-mark hold {{ item }}"
+      loop: "{{ nvidia_driver_ubuntu_version_lock_packages }}"
+      when: item not in (nvidia_driver_ubuntu_hold_list.stdout_lines | default([]))
+  when: nvidia_driver_ubuntu_version_lock_packages | default([]) | length > 0
+
+# =============================================================================
+# Phase 9: GPUDirect (gdrcopy) Installation
+# =============================================================================
+- name: Install and configure gdrcopy
+  block:
+    - name: Install gdrcopy
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_gdrcopy_package }}"
+        state: present
+        update_cache: true
+      register: nvidia_driver_gdrcopy_install
+      failed_when: false
+
+    - name: Attempt DKMS autoinstall for gdrcopy
+      ansible.builtin.command: "dkms autoinstall -k {{ ansible_facts['kernel'] }}"
+      register: nvidia_driver_gdrcopy_dkms
+      changed_when: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Check gdrcopy module availability
+      ansible.builtin.command: "modinfo gdr_copy"
+      register: nvidia_driver_gdrcopy_modinfo
+      changed_when: false
+      failed_when: false
+
+    - name: Warn if gdrcopy install failed
+      ansible.builtin.debug:
+        msg: "WARNING: gdrcopy install failed. Set nvidia_driver_gdrcopy_package or install manually."
+      when: nvidia_driver_gdrcopy_install is failed
+
+    - name: Warn if gdrcopy module is missing
+      ansible.builtin.debug:
+        msg: "WARNING: gdrcopy module not found after install. Check DKMS logs under /var/lib/dkms or try building for kernel {{ ansible_facts['kernel'] }}."
+      when:
+        - nvidia_driver_gdrcopy_modinfo is defined
+        - nvidia_driver_gdrcopy_modinfo.rc != 0
+  when: nvidia_driver_gdrcopy_enabled
+
+# =============================================================================
+# Phase 10: Prebuilt Module Cleanup (when not using prebuilt modules)
+# =============================================================================
+- name: Handle prebuilt module cleanup
+  block:
+    - name: Detect prebuilt linux-modules-nvidia packages
+      ansible.builtin.shell: "dpkg -l | awk '/^ii\\s+linux-modules-nvidia-/{print $2}'"
+      register: nvidia_driver_ubuntu_installed_modules
+      changed_when: false
+
+    - name: Purge prebuilt linux-modules-nvidia packages
+      ansible.builtin.apt:
+        name: "{{ nvidia_driver_ubuntu_installed_modules.stdout_lines }}"
+        state: absent
+        purge: true
+      when: (nvidia_driver_ubuntu_installed_modules.stdout_lines | default([]) | length) > 0
+
+    - name: Update initramfs after removing prebuilt modules
+      ansible.builtin.command: "update-initramfs -u -k {{ ansible_facts['kernel'] }}"
+      changed_when: true
+      when:
+        - (nvidia_driver_ubuntu_installed_modules.stdout_lines | default([]) | length) > 0
+        - not ansible_check_mode
+
+    - name: Force reboot after prebuilt module cleanup
+      ansible.builtin.set_fact:
+        nvidia_reboot_required: true
+      when: (nvidia_driver_ubuntu_installed_modules.stdout_lines | default([]) | length) > 0
+  when: not (nvidia_driver_ubuntu_use_kernel_modules_effective | default(true))

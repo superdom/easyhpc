@@ -1,0 +1,81 @@
+---
+# Services configuration
+# Defaults live in roles/*/defaults/main.yml; this file sets cluster-level overrides.
+
+# NVIDIA driver (defaults in roles/nvidia-driver/defaults/main.yml)
+nvidia_driver_enabled: true
+nvidia_driver_strategy: "specific"
+nvidia_driver_version: "580.126.09"
+nvidia_driver_allow_downgrade: true
+nvidia_nvswitch_enabled: true
+nvidia_fabric_manager_enabled: true
+nvidia_driver_peermem_enabled: true
+nvidia_driver_gdrcopy_enabled: true
+
+# Docker (defaults in roles/docker/defaults/main.yml)
+docker_enabled: true
+docker_force_reinstall: false
+
+# NVIDIA Container Toolkit (defaults in roles/nvidia-container-toolkit/defaults/main.yml)
+nvidia_container_toolkit_enabled: true
+
+# Enroot (defaults in roles/enroot/defaults/main.yml)
+enroot_enabled: true
+enroot_version: "v4.0.1"
+enroot_cache_dir: "/tmp/enroot-cache"
+enroot_data_dir: "/tmp/enroot"
+enroot_force_reinstall: false
+
+# Pyxis (SLURM plugin; defaults in roles/pyxis/defaults/main.yml)
+pyxis_enabled: true
+pyxis_version: "0.21.0"
+pyxis_plugins_dir: "{{ slurm_install_prefix }}/lib/slurm"
+pyxis_force_reinstall: false
+
+# Monitoring/Logging toggles
+monitoring_enabled: true
+node_exporter_enabled: true
+
+# Logging stack (Loki + Alloy)
+loki_enabled: true
+loki_version: "2.9.8"
+loki_http_port: 3100
+loki_data_dir: "/var/lib/loki"
+loki_retention_period: "720h"
+loki_log_level: "info"
+
+alloy_enabled: true
+alloy_version: "1.12.2"
+alloy_data_dir: "/var/lib/alloy"
+alloy_config_dir: "/etc/alloy"
+
+# Exporter versions and ports (defaults in roles/monitoring/defaults/main.yml)
+node_exporter_version: "v1.10.2"
+node_exporter_port: 9100
+slurm_exporter_port: 8080
+dcgm_exporter_port: 9400
+
+# Alertmanager configuration (defaults in roles/monitoring/defaults/main.yml)
+alertmanager_version: "v0.27.0"
+alertmanager_port: 9093
+alertmanager_force_reinstall: false
+
+# Prometheus configuration (defaults in roles/monitoring/defaults/main.yml)
+prometheus_version: "v3.2.1"
+prometheus_port: 9090
+prometheus_data_dir: "/var/lib/prometheus"
+prometheus_force_reinstall: false
+
+# Grafana configuration (defaults in roles/monitoring/defaults/main.yml)
+grafana_version: "12.3.0"
+grafana_port: 3000
+grafana_admin_user: "admin"
+grafana_admin_password: "admin"
+grafana_force_reinstall: false
+grafana_node_exporter_dashboard_id: 1860
+grafana_slurm_dashboard_id: 19835
+grafana_dashboard_revision: "latest"
+
+# Loki URL for Grafana datasource
+loki_url: "http://{{ hostvars[groups['logging'][0]].ansible_host | default('localhost') }}:{{ loki_http_port }}"
+alloy_loki_url: "{{ loki_url }}/loki/api/v1/push"

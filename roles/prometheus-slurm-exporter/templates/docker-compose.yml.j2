@@ -1,0 +1,16 @@
+services:
+  slurm-exporter:
+    build:
+      context: /tmp/prometheus-slurm-exporter
+      dockerfile: /tmp/prometheus-slurm-exporter/Dockerfile
+    image: slurm-exporter:{{ slurm_exporter_version | default('latest') }}
+    container_name: slurm-exporter
+    restart: unless-stopped
+    ports:
+      - "{{ slurm_exporter_port }}:8080"
+    volumes:
+      - /etc/slurm:/etc/slurm:ro
+    environment:
+      - SLURM_SLURMCTLD_URL=http://{{ slurm_config.SlurmctldHost | default(groups['slurm-controller'][0] | default('localhost')) }}:{{ slurm_config.SlurmctldPort | default(6817) }}
+    network_mode: host
+

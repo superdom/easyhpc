@@ -1,0 +1,7 @@
+---
+# Handlers for Prometheus SLURM Exporter (systemd)
+
+- name: restart slurm_exporter
+  ansible.builtin.systemd:
+    name: "{{ slurm_exporter_service_name }}"
+    state: restarted

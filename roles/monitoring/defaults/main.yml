@@ -1,0 +1,35 @@
+---
+# Monitoring role defaults
+
+monitoring_enabled: false
+node_exporter_enabled: true
+
+# Prometheus configuration
+prometheus_version: "v2.55.1"
+prometheus_port: 9090
+prometheus_data_dir: "/var/lib/prometheus"
+prometheus_force_reinstall: false
+
+# Grafana configuration
+grafana_version: "11.2.0"
+grafana_port: 3000
+grafana_admin_user: "admin"
+grafana_admin_password: "admin"
+grafana_force_reinstall: false
+grafana_data_dir: "/var/lib/grafana"
+grafana_node_exporter_dashboard_id: 1860
+grafana_slurm_dashboard_id: 19835
+grafana_gpu_nodes_dashboard_id: 24680
+grafana_syslog_dashboard_id: 24676
+grafana_slurm_log_dashboard_id: 24677
+grafana_dashboard_revision: "latest"
+
+# Alertmanager configuration
+alertmanager_version: "v0.27.0"
+alertmanager_port: 9093
+alertmanager_force_reinstall: false
+
+# Exporter ports
+node_exporter_port: 9100
+slurm_exporter_port: 8080
+dcgm_exporter_port: 9445

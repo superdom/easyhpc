@@ -1,0 +1,11 @@
+---
+# Preflight orchestration
+
+- name: Preflight validation
+  ansible.builtin.include_tasks: validate.yml
+
+- name: GPU detection and preparation
+  ansible.builtin.include_tasks: detect.yml
+
+- name: Cleanup and nouveau handling
+  ansible.builtin.include_tasks: cleanup.yml

@@ -1,0 +1,20 @@
+---
+# Install orchestration
+
+- name: Common install facts
+  ansible.builtin.include_tasks: common.yml
+
+- name: Ubuntu driver install
+  ansible.builtin.include_tasks: ubuntu.yml
+  when: ansible_facts['distribution'] == 'Ubuntu'
+
+- name: RHEL/Rocky driver install
+  ansible.builtin.include_tasks: rhel.yml
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Set reboot flag if driver packages were installed
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when:
+    - nvidia_driver_install is defined
+    - nvidia_driver_install.changed

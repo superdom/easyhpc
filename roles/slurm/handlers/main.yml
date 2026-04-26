@@ -1,0 +1,38 @@
+---
+# Slurm role handlers
+
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart slurm services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - "slurmctld"
+    - "slurmd"
+  when: item in (['slurmctld'] if 'controller' in node_roles else []) + (['slurmd'] if 'exec' in node_roles else [])
+
+- name: restart slurmctld
+  ansible.builtin.systemd:
+    name: slurmctld
+    state: restarted
+  when: "'controller' in node_roles"
+
+- name: restart slurmd
+  ansible.builtin.systemd:
+    name: slurmd
+    state: restarted
+  when: "'exec' in node_roles"
+
+- name: restart slurmdbd
+  ansible.builtin.systemd:
+    name: slurmdbd
+    state: restarted
+  when: "'dbd' in node_roles or 'controller' in node_roles"
+
+- name: reload slurm
+  ansible.builtin.command: "{{ slurm_install_prefix }}/bin/scontrol reconfigure"
+  changed_when: false
+  when: "'controller' in node_roles"

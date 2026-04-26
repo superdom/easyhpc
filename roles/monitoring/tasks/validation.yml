@@ -1,0 +1,130 @@
+---
+# Monitoring validation tasks
+
+- name: Check Prometheus container status
+  ansible.builtin.command: docker ps -a --filter "name=prometheus" --format "{{ '{{' }}.Status{{ '}}' }}"
+  register: prometheus_container_status
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+
+- name: Get Prometheus container logs if restarting
+  ansible.builtin.command: docker logs --tail 50 prometheus
+  register: prometheus_logs
+  changed_when: false
+  when: "'Restarting' in prometheus_container_status.stdout | default('')"
+  ignore_errors: true
+
+- name: Display Prometheus container logs
+  ansible.builtin.debug:
+    msg: "{{ prometheus_logs.stdout_lines | default([]) }}"
+  when:
+    - prometheus_logs.stdout_lines is defined
+    - prometheus_logs.stdout_lines | length > 0
+
+- name: Check Grafana container status
+  ansible.builtin.command: docker ps -a --filter "name=grafana" --format "{{ '{{' }}.Status{{ '}}' }}"
+  register: grafana_container_status
+  changed_when: false
+  failed_when: false
+  ignore_errors: true
+
+- name: Get Grafana container logs if restarting
+  ansible.builtin.command: docker logs --tail 50 grafana
+  register: grafana_logs
+  changed_when: false
+  when: "'Restarting' in grafana_container_status.stdout | default('')"
+  ignore_errors: true
+
+- name: Display Grafana container logs
+  ansible.builtin.debug:
+    msg: "{{ grafana_logs.stdout_lines | default([]) }}"
+  when:
+    - grafana_logs.stdout_lines is defined
+    - grafana_logs.stdout_lines | length > 0
+
+- name: Check Prometheus configuration file
+  ansible.builtin.stat:
+    path: /etc/prometheus/prometheus.yml
+  register: prometheus_conf_stat
+  failed_when: false
+
+- name: Display Prometheus configuration file status
+  ansible.builtin.debug:
+    msg:
+      - "Prometheus config file exists: {{ prometheus_conf_stat.stat.exists | default(false) }}"
+      - "Prometheus config file mode: {{ prometheus_conf_stat.stat.mode | default('N/A') }}"
+  when: prometheus_conf_stat.stat.exists is defined
+
+- name: Validate Prometheus configuration
+  ansible.builtin.command: docker run --rm -v /etc/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro prom/prometheus:{{ prometheus_version | default('latest') }} promtool check config /etc/prometheus/prometheus.yml
+  register: prometheus_config_validation
+  changed_when: false
+  failed_when: false
+  when: prometheus_conf_stat.stat.exists
+  ignore_errors: true
+
+- name: Display Prometheus configuration validation
+  ansible.builtin.debug:
+    msg: "{{ prometheus_config_validation.stdout_lines | default([]) + prometheus_config_validation.stderr_lines | default([]) }}"
+  when:
+    - prometheus_config_validation.stdout_lines is defined or prometheus_config_validation.stderr_lines is defined
+    - prometheus_conf_stat.stat.exists
+
+- name: Restart Prometheus container if restarting
+  ansible.builtin.command: docker restart prometheus
+  when: "'Restarting' in prometheus_container_status.stdout | default('')"
+  register: prometheus_restart
+  ignore_errors: true
+
+- name: Restart Grafana container if restarting
+  ansible.builtin.command: docker restart grafana
+  when: "'Restarting' in grafana_container_status.stdout | default('')"
+  register: grafana_restart
+  ignore_errors: true
+
+- name: Wait a moment after container restart
+  ansible.builtin.command: sleep 10
+  when: prometheus_restart.changed | default(false) or grafana_restart.changed | default(false)
+  changed_when: false
+
+- name: Wait for Prometheus to be ready
+  ansible.builtin.wait_for:
+    port: "{{ prometheus_port }}"
+    host: localhost
+    delay: 5
+    timeout: 60
+  when: "'Restarting' not in prometheus_container_status.stdout | default('')"
+  ignore_errors: true
+
+- name: Wait for Grafana to be ready
+  ansible.builtin.wait_for:
+    port: "{{ grafana_port }}"
+    host: localhost
+    delay: 5
+    timeout: 60
+  when: "'Restarting' not in grafana_container_status.stdout | default('')"
+  ignore_errors: true
+
+- name: Verify Prometheus is running
+  ansible.builtin.uri:
+    url: "http://localhost:{{ prometheus_port }}/-/healthy"
+    status_code: 200
+  register: prometheus_check
+  changed_when: false
+  failed_when: false
+
+- name: Verify Grafana is running
+  ansible.builtin.uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+  register: grafana_check
+  changed_when: false
+  failed_when: false
+
+- name: Display monitoring status
+  ansible.builtin.debug:
+    msg:
+      - "Prometheus: {{ 'Running' if prometheus_check.status == 200 else 'Not Running' }}"
+      - "Grafana: {{ 'Running' if grafana_check.status == 200 else 'Not Running' }}"
+

@@ -1,0 +1,15 @@
+---
+# Handlers for NVIDIA DCGM Exporter (Docker)
+
+- name: restart dcgm-exporter
+  community.docker.docker_compose_v2:
+    project_src: /opt/dcgm-exporter
+    services:
+      - dcgm-exporter
+    state: restarted
+  ignore_errors: true
+  register: restart_result
+
+- name: restart dcgm-exporter (fallback)
+  ansible.builtin.command: docker compose -f /opt/dcgm-exporter/docker-compose.yml restart dcgm-exporter
+  when: restart_result is failed

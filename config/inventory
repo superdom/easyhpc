@@ -1,0 +1,45 @@
+[slurm-controller]
+# SLURM controller
+easyhpc-mgmt01 ansible_host=10.0.0.11
+easyhpc-mgmt02 ansible_host=10.0.0.12
+
+[slurm-node]
+# SLURM compute nodes
+easyhpc-cpu01 ansible_host=10.0.0.21
+easyhpc-cpu02 ansible_host=10.0.0.22
+
+[slurm-login]
+# SLURM login nodes
+easyhpc-login ansible_host=10.0.0.31
+
+[nfs-server]
+# NFS server
+easyhpc-mgmt04 ansible_host=10.0.0.14
+
+[nfs-client:children]
+# NFS clients
+slurm-controller
+slurm-node
+slurm-login
+
+[monitoring]
+# Monitoring server
+easyhpc-mgmt03 ansible_host=10.0.0.13
+
+[logging]
+# Logging server
+easyhpc-mgmt03 ansible_host=10.0.0.13
+
+[ldap]
+# LDAP server
+easyhpc-mgmt03 ansible_host=10.0.0.13
+
+[easybuild]
+# EasyBuild build hosts
+easyhpc-mgmt01 ansible_host=10.0.0.11
+
+[all:vars]
+# SSH connection settings
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+ansible_user=ubuntu
+ansible_python_interpreter=auto_silent

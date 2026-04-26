@@ -1,0 +1,9 @@
+---
+# Enroot role defaults
+
+enroot_enabled: false
+enroot_version: "v4.0.1"
+enroot_cache_dir: "/tmp/enroot-cache"
+enroot_data_dir: "/tmp/enroot"
+enroot_force_reinstall: false
+

@@ -1,0 +1,61 @@
+---
+# EasyBuild role defaults
+
+# EasyBuild enable toggle
+easybuild_enabled: false
+
+easybuild_bootstrap_venv: "/opt/easybuild/bootstrap-venv"
+easybuild_bootstrap_python: "python3"
+easybuild_force_reinstall: false
+easybuild_autoload_module: false
+# EasyBuild version to install as module (pinned for reproducibility)
+easybuild_version: "5.1.1"
+easybuild_hosts: []
+
+# EasyBuild easyconfigs repository
+easybuild_easyconfigs_repo_url: "https://github.com/easybuilders/easybuild-easyconfigs.git"
+easybuild_easyconfigs_version: "main"
+easybuild_easyconfigs_path: "{{ modules_base_path | default('/data/apps') }}/easybuild/easyconfigs"
+
+# Paths (default to shared module tree layout)
+easybuild_install_path: "{{ modules_base_path | default('/data/apps') }}"
+easybuild_modules_root: "{{ modules_root | default(easybuild_install_path ~ '/modules') }}"
+easybuild_modules_path: "{{ modules_path | default(easybuild_modules_root ~ '/all') }}"
+easybuild_state_path: "{{ easybuild_install_path }}/easybuild"
+easybuild_config_path: "{{ easybuild_state_path }}/config"
+easybuild_config_file: "{{ easybuild_config_path }}/eb.cfg"
+easybuild_modulefile: "{{ easybuild_modules_path }}/EasyBuild/{{ easybuild_version }}.lua"
+easybuild_source_path: "{{ easybuild_state_path }}/sources"
+easybuild_repository_path: "{{ easybuild_state_path }}/ebfiles_repo"
+easybuild_build_path: "/tmp/easybuild/build"
+easybuild_tmp_path: "/tmp/easybuild/tmp"
+easybuild_containers_path: "{{ easybuild_state_path }}/containers"
+easybuild_robot_paths: "{{ easybuild_easyconfigs_path }}/easybuild/easyconfigs"
+
+# Shared storage integration
+easybuild_storage_path: "{{ modules_storage_path | default(easybuild_install_path) }}"
+easybuild_manage_shared_paths: "{{ modules_manage_shared_paths | default(true) }}"
+easybuild_storage_host: >-
+  {{
+    modules_storage_host
+    | default(
+        (groups['easybuild'] | default([]) | first)
+        | default((groups['slurm-login'] | default([])) | first)
+        | default((groups['slurm-controller'] | default([])) | first)
+        | default(inventory_hostname)
+      )
+  }}
+easybuild_directory_owner: >-
+  {{
+    modules_directory_owner
+    | default(modules_base_owner | default(ansible_facts.env.SUDO_USER | default(ansible_user)))
+  }}
+easybuild_directory_group: >-
+  {{
+    modules_directory_group
+    | default(
+        modules_base_group
+        | default(modules_base_owner | default(ansible_facts.env.SUDO_USER | default(ansible_user)))
+      )
+  }}
+easybuild_directory_mode: "{{ modules_directory_mode | default(modules_base_mode | default('2775')) }}"

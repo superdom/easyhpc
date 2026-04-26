@@ -1,0 +1,67 @@
+---
+# Installation tasks - Source compilation only
+
+- name: Check if Slurm is already installed
+  ansible.builtin.stat:
+    path: "{{ slurm_install_prefix }}/bin/scontrol"
+  register: slurm_installed
+
+- name: Stop SLURM services before upgrade
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - slurmctld
+    - slurmd
+    - slurmdbd
+  when:
+    - slurm_installed.stat.exists
+    - slurm_upgrade | default(false)
+
+- name: Download Slurm source
+  ansible.builtin.get_url:
+    url: "{{ slurm_source_url }}"
+    dest: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}.tar.bz2"
+    mode: '0644'
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Extract Slurm source
+  ansible.builtin.unarchive:
+    src: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}.tar.bz2"
+    dest: "{{ slurm_build_dir }}"
+    remote_src: true
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Configure Slurm (autogen.sh)
+  ansible.builtin.command: ./autogen.sh
+  args:
+    chdir: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}"
+    creates: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}/configure"
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Configure Slurm (configure)
+  ansible.builtin.command: >-
+    ./configure {{ slurm_configure_options }}
+    {% if slurm_enable_nvml | default(false) %} --with-nvml={{ slurm_nvml_prefix | default('/usr') }}{% endif %}
+  args:
+    chdir: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}"
+    creates: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}/Makefile"
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Build Slurm
+  ansible.builtin.make:
+    chdir: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}"
+    target: all
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Install Slurm
+  ansible.builtin.make:
+    chdir: "{{ slurm_build_dir }}/slurm-{{ slurm_version }}"
+    target: install
+  when: (not slurm_installed.stat.exists) or slurm_force_rebuild or slurm_upgrade
+
+- name: Clean up build directory
+  ansible.builtin.file:
+    path: "{{ slurm_build_dir }}"
+    state: absent
+  when: slurm_installed.stat.exists

@@ -1,0 +1,11 @@
+---
+# Handlers for NVIDIA driver role
+
+- name: Update initramfs for NVIDIA driver
+  ansible.builtin.command: update-initramfs -u
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Rebuild initramfs with dracut (RedHat)
+  ansible.builtin.command: dracut -f
+  when: ansible_facts['os_family'] == 'RedHat'
+  listen: Update initramfs for NVIDIA driver

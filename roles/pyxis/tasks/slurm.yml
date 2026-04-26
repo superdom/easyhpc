@@ -1,0 +1,33 @@
+---
+- name: "Ensure Slurm plugstack conf dir exists"
+  ansible.builtin.file:
+    path: "{{ pyxis_slurm_plugstack_conf_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: "Ensure Slurm plugstack.conf includes *.conf from plugstack.conf.d"
+  ansible.builtin.blockinfile:
+    path: "{{ pyxis_slurm_plugstack_conf }}"
+    create: true
+    owner: root
+    group: root
+    mode: "0644"
+    block: |
+      # Managed by Ansible (pyxis role)
+      include {{ pyxis_slurm_plugstack_conf_dir }}/*.conf
+  notify:
+    - restart slurmd
+    - restart slurmctld
+
+- name: "Deploy Pyxis plugstack configuration"
+  ansible.builtin.template:
+    src: "pyxis.conf.j2"
+    dest: "{{ pyxis_slurm_pyxis_conf_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - restart slurmd
+    - restart slurmctld

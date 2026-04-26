@@ -1,0 +1,9 @@
+---
+# NFS Server role defaults
+
+# NFS Configuration
+nfs_mount_root: "{{ shared_storage_mount | default('/data') }}"
+
+nfs_exports:
+  - path: "{{ nfs_mount_root }}"
+    options: "*(rw,sync,no_root_squash)"

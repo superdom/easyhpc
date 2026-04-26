@@ -1,0 +1,256 @@
+---
+- name: Set LDAP server paths
+  ansible.builtin.set_fact:
+    ldap_tls_cert_path_effective: "{{ (ansible_facts.os_family == 'RedHat') | ternary(ldap_tls_cert_path_redhat, ldap_tls_cert_path_debian) }}"
+    ldap_tls_key_path_effective: "{{ (ansible_facts.os_family == 'RedHat') | ternary(ldap_tls_key_path_redhat, ldap_tls_key_path_debian) }}"
+    ldap_tls_ca_path_effective: "{{ (ansible_facts.os_family == 'RedHat') | ternary(ldap_tls_cacert_redhat, ldap_tls_cacert_debian) }}"
+    ldap_schema_dir: "{{ (ansible_facts.os_family == 'RedHat') | ternary('/etc/openldap/schema', '/etc/ldap/schema') }}"
+    ldap_service_user: "{{ (ansible_facts.os_family == 'RedHat') | ternary('ldap', 'openldap') }}"
+    ldap_service_group: "{{ (ansible_facts.os_family == 'RedHat') | ternary('ldap', 'openldap') }}"
+
+- name: Install LDAP server packages
+  ansible.builtin.package:
+    name: "{{ (ansible_facts.os_family == 'RedHat') | ternary(['openldap-servers', 'openldap-clients'], ['slapd', 'ldap-utils']) }}"
+    state: present
+
+- name: Ensure slapd service is enabled and running
+  ansible.builtin.service:
+    name: slapd
+    enabled: true
+    state: started
+
+- name: Ensure TLS directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop: "{{ [ldap_tls_cert_path_effective, ldap_tls_key_path_effective, ldap_tls_ca_path_effective] | map('dirname') | unique | list }}"
+  when: ldap_tls_enabled | default(false)
+
+- name: Copy TLS certificate
+  ansible.builtin.copy:
+    content: "{{ ldap_tls_cert_content }}"
+    dest: "{{ ldap_tls_cert_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - ldap_tls_cert_content | length > 0
+
+- name: Copy TLS certificate from controller file
+  ansible.builtin.copy:
+    src: "{{ ldap_tls_cert_src }}"
+    dest: "{{ ldap_tls_cert_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - (ldap_tls_cert_src | default('')) | length > 0
+
+- name: Copy TLS private key
+  ansible.builtin.copy:
+    content: "{{ ldap_tls_key_content }}"
+    dest: "{{ ldap_tls_key_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0600"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - ldap_tls_key_content | length > 0
+
+- name: Copy TLS private key from controller file
+  ansible.builtin.copy:
+    src: "{{ ldap_tls_key_src }}"
+    dest: "{{ ldap_tls_key_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0600"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - (ldap_tls_key_src | default('')) | length > 0
+
+- name: Copy TLS CA certificate
+  ansible.builtin.copy:
+    content: "{{ ldap_tls_ca_cert_content }}"
+    dest: "{{ ldap_tls_ca_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - ldap_tls_ca_cert_content | length > 0
+
+- name: Copy TLS CA certificate from controller file
+  ansible.builtin.copy:
+    src: "{{ ldap_tls_ca_cert_src }}"
+    dest: "{{ ldap_tls_ca_path_effective }}"
+    owner: "{{ ldap_service_user }}"
+    group: "{{ ldap_service_group }}"
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - (ldap_tls_ca_cert_src | default('')) | length > 0
+
+- name: Check TLS certificate file presence
+  ansible.builtin.stat:
+    path: "{{ ldap_tls_cert_path_effective }}"
+  register: ldap_tls_cert_stat
+  when: ldap_tls_enabled | default(false)
+
+- name: Check TLS private key file presence
+  ansible.builtin.stat:
+    path: "{{ ldap_tls_key_path_effective }}"
+  register: ldap_tls_key_stat
+  when: ldap_tls_enabled | default(false)
+
+- name: Check TLS CA file presence
+  ansible.builtin.stat:
+    path: "{{ ldap_tls_ca_path_effective }}"
+  register: ldap_tls_ca_stat
+  when: ldap_tls_enabled | default(false)
+
+- name: Assert TLS files exist when TLS is enabled
+  ansible.builtin.assert:
+    that:
+      - ldap_tls_cert_content | length > 0 or (ldap_tls_cert_stat.stat.exists | default(false))
+      - ldap_tls_key_content | length > 0 or (ldap_tls_key_stat.stat.exists | default(false))
+      - ldap_tls_ca_cert_content | length > 0 or (ldap_tls_ca_stat.stat.exists | default(false))
+    fail_msg: "TLS enabled but certificate/key/CA files are missing and no content provided."
+  when: ldap_tls_enabled | default(false)
+
+- name: Render olc config LDIF
+  ansible.builtin.template:
+    src: olc-config.ldif.j2
+    dest: /tmp/olc-config.ldif
+    mode: "0600"
+  no_log: true
+
+- name: Read current suffix/root configuration
+  ansible.builtin.command: >-
+    ldapsearch -LLL -Y EXTERNAL -H ldapi:/// -b olcDatabase={2}mdb,cn=config -s base
+    olcSuffix olcRootDN olcRootPW
+  register: ldap_current_olc_config
+  changed_when: false
+  failed_when: ldap_current_olc_config.rc not in [0]
+  no_log: true
+
+- name: Determine whether suffix/root configuration update is needed
+  ansible.builtin.set_fact:
+    ldap_current_suffix: >-
+      {{ (ldap_current_olc_config.stdout_lines | default([]) | select('match', '^olcSuffix:\\s*') | first | default('') | regex_replace('^olcSuffix:\\s*', '')) }}
+    ldap_current_root_dn: >-
+      {{ (ldap_current_olc_config.stdout_lines | default([]) | select('match', '^olcRootDN:\\s*') | first | default('') | regex_replace('^olcRootDN:\\s*', '')) }}
+    ldap_current_root_pw_hash: >-
+      {{ (ldap_current_olc_config.stdout_lines | default([]) | select('match', '^olcRootPW:\\s*') | first | default('') | regex_replace('^olcRootPW:\\s*', '')) }}
+  changed_when: false
+
+- name: Decide whether to apply suffix/root configuration
+  ansible.builtin.set_fact:
+    ldap_needs_olc_config_update: >-
+      {{
+        ((ldap_current_olc_config.stdout | default('')) | length == 0)
+        or ((ldap_current_suffix | default('')) != ldap_suffix)
+        or ((ldap_current_root_dn | default('')) != ldap_root_dn)
+        or ((ldap_current_root_pw_hash | default('')) != ldap_root_pw_hash)
+      }}
+  changed_when: false
+
+- name: Apply suffix and root credentials (only when needed)
+  ansible.builtin.command: "ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/olc-config.ldif"
+  register: ldap_config_result
+  changed_when: true
+  failed_when: ldap_config_result.rc not in [0]
+  notify: restart slapd
+  no_log: true
+  when: ldap_needs_olc_config_update | bool
+
+- name: Render TLS config LDIF
+  ansible.builtin.template:
+    src: olc-tls.ldif.j2
+    dest: /tmp/olc-tls.ldif
+    mode: "0600"
+  when: ldap_tls_enabled | default(false)
+
+- name: Read current TLS configuration
+  ansible.builtin.command: >-
+    ldapsearch -LLL -Y EXTERNAL -H ldapi:/// -b cn=config -s base
+    olcTLSCertificateFile olcTLSCertificateKeyFile olcTLSCACertificateFile
+  register: ldap_current_tls_config
+  changed_when: false
+  failed_when: ldap_current_tls_config.rc not in [0]
+  no_log: true
+  when: ldap_tls_enabled | default(false)
+
+- name: Determine whether TLS configuration update is needed
+  ansible.builtin.set_fact:
+    ldap_current_tls_cert_file: >-
+      {{ (ldap_current_tls_config.stdout_lines | default([]) | select('match', '^olcTLSCertificateFile:\\s*') | first | default('') | regex_replace('^olcTLSCertificateFile:\\s*', '')) }}
+    ldap_current_tls_key_file: >-
+      {{ (ldap_current_tls_config.stdout_lines | default([]) | select('match', '^olcTLSCertificateKeyFile:\\s*') | first | default('') | regex_replace('^olcTLSCertificateKeyFile:\\s*', '')) }}
+    ldap_current_tls_ca_file: >-
+      {{ (ldap_current_tls_config.stdout_lines | default([]) | select('match', '^olcTLSCACertificateFile:\\s*') | first | default('') | regex_replace('^olcTLSCACertificateFile:\\s*', '')) }}
+  changed_when: false
+  when: ldap_tls_enabled | default(false)
+
+- name: Decide whether to apply TLS configuration
+  ansible.builtin.set_fact:
+    ldap_needs_tls_update: >-
+      {{
+        ((ldap_current_tls_config.stdout | default('')) | length == 0)
+        or ((ldap_current_tls_cert_file | default('')) != ldap_tls_cert_path_effective)
+        or ((ldap_current_tls_key_file | default('')) != ldap_tls_key_path_effective)
+        or ((ldap_current_tls_ca_file | default('')) != ldap_tls_ca_path_effective)
+      }}
+  changed_when: false
+  when: ldap_tls_enabled | default(false)
+
+- name: Apply TLS configuration (only when needed)
+  ansible.builtin.command: "ldapmodify -Y EXTERNAL -H ldapi:/// -f /tmp/olc-tls.ldif"
+  register: ldap_tls_result
+  changed_when: true
+  failed_when: ldap_tls_result.rc not in [0]
+  notify: restart slapd
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - ldap_needs_tls_update | default(true) | bool
+
+- name: Load default schemas
+  ansible.builtin.command: "ldapadd -Y EXTERNAL -H ldapi:/// -f {{ ldap_schema_dir }}/{{ item }}.ldif"
+  loop:
+    - cosine
+    - nis
+    - inetorgperson
+  register: ldap_schema_result
+  failed_when: >-
+    (ldap_schema_result.results | default([]) | selectattr('rc', 'not in', [0, 68]) | list | length) > 0
+  changed_when: >-
+    (ldap_schema_result.results | default([]) | selectattr('rc', 'equalto', 0) | list | length) > 0
+
+- name: Render base DIT LDIF
+  ansible.builtin.template:
+    src: base.ldif.j2
+    dest: /tmp/base.ldif
+    mode: "0600"
+  no_log: true
+
+- name: Seed base DIT
+  ansible.builtin.command: "ldapadd -x -D {{ ldap_root_dn }} -w {{ ldap_root_pw }} -H ldapi:/// -f /tmp/base.ldif"
+  register: ldap_seed_result
+  failed_when: ldap_seed_result.rc not in [0, 68]
+  changed_when: ldap_seed_result.rc == 0
+  no_log: true
+
+- name: Ensure slapd is running
+  ansible.builtin.service:
+    name: slapd
+    enabled: true
+    state: started

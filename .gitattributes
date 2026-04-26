@@ -1,0 +1,22 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts
+*.sh text eol=lf
+
+# Ansible files
+*.yml text eol=lf
+*.yaml text eol=lf
+*.j2 text eol=lf
+
+# Python files
+*.py text eol=lf
+
+# Markdown
+*.md text eol=lf
+
+# Config files
+*.conf text eol=lf
+*.cfg text eol=lf
+*.ini text eol=lf
+

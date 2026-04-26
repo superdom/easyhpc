@@ -1,0 +1,87 @@
+---
+# NVIDIA Driver role defaults (NVSwitch-ready, branch-pinned)
+
+# Install only on GPU nodes
+nvidia_driver_require_gpu: true
+nvidia_driver_skip_if_no_gpu: true
+
+# Driver installation strategy
+nvidia_driver_strategy: "branch"  # latest, branch, specific
+nvidia_driver_branch: "580"
+nvidia_driver_version: ""  # specific version like 580.90.07
+
+# Package management
+nvidia_driver_package_state: "present"  # present or latest
+nvidia_driver_allow_downgrade: false
+
+# NVSwitch / Fabric Manager
+nvidia_nvswitch_enabled: true
+nvidia_nvswitch_generation: 4
+nvidia_fabric_manager_enabled: true
+nvidia_fabric_manager_service_enabled: true
+nvidia_fabric_manager_service_state: started
+
+# GPU class override (auto-detected if empty): rtx, a100, h100, b200
+nvidia_gpu_class_override: ""
+
+# Kernel modules
+nvidia_driver_use_open_kernel_modules: true
+nvidia_driver_module_params: ""
+nvidia_driver_module_file: "/etc/modprobe.d/nvidia.conf"
+
+# Reboot configuration
+nvidia_driver_skip_reboot: false
+nvidia_driver_reboot_timeout: 1200
+
+# Driver settings
+nvidia_driver_persistence_mode: true
+nvidia_driver_performance_mode: "default"  # default, max_performance, power_save
+
+# GPUDirect / RDMA modules (optional)
+nvidia_driver_peermem_enabled: false
+nvidia_driver_gdrcopy_enabled: false
+nvidia_driver_gdrcopy_package: "gdrcopy-dkms"
+nvidia_driver_modules_autoload: true
+nvidia_driver_modules_autoload_file: "/etc/modules-load.d/nvidia-gpudirect.conf"
+nvidia_driver_extra_kernel_modules: []
+
+# Nouveau driver management
+nvidia_driver_blacklist_nouveau: true
+nvidia_driver_remove_nouveau: true
+nvidia_driver_cleanup_old_drivers: false
+# Force clean reinstall (purge NVIDIA packages before install)
+nvidia_driver_clean_install: false
+
+# Validation
+nvidia_driver_validate_installation: true
+# Secure Boot handling: warn|fail|ignore
+nvidia_driver_secure_boot_policy: "warn"
+
+# Repository configuration
+nvidia_driver_use_official_repo: true
+
+# Ubuntu specific
+nvidia_driver_ubuntu_use_ubuntu_drivers: false
+nvidia_driver_ubuntu_cuda_repo_url: "https://developer.download.nvidia.com/compute/cuda/repos"
+nvidia_driver_ubuntu_cuda_keyring_url: ""
+# Use prebuilt kernel modules package on Ubuntu (set false to prefer DKMS only)
+nvidia_driver_ubuntu_use_kernel_modules: true
+# Ubuntu 590+ package naming (auto/true/false)
+nvidia_driver_ubuntu_use_new_naming: "auto"
+# Optional version locking packages for Ubuntu/Debian
+nvidia_driver_ubuntu_version_lock_packages: []
+
+# RHEL/Rocky specific
+nvidia_driver_rhel_cuda_repo_url: "https://developer.download.nvidia.com/compute/cuda/repos"
+# Repo id used in CUDA repo URL (defaults to rhel9 for EL9)
+nvidia_driver_rhel_repo_id: "rhel{{ ansible_facts['distribution_major_version'] }}"
+# RHEL module profile override (default auto: /fm for NVSwitch, /default otherwise)
+nvidia_driver_rhel_module_profile: ""
+
+# Extra packages
+nvidia_driver_ubuntu_packages_extra: []
+nvidia_driver_rhel_packages_extra: []
+
+# RHEL module stream/profile
+nvidia_driver_rhel_module_reset: true
+nvidia_driver_rhel_module_stream: ""

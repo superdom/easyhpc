@@ -1,0 +1,5 @@
+---
+# Backward-compat shim: reuse preflight validation
+
+- name: Include preflight validation tasks
+  ansible.builtin.include_tasks: preflight/validate.yml

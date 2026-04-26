@@ -1,0 +1,65 @@
+---
+# Global defaults for EasyHPC (shared across playbooks)
+
+# Cluster identity
+cluster_name: "easyhpc"
+
+# Service users (created by common role)
+munge_user:
+  name: "munge"
+  uid: 10010
+  gid: 10010
+  group: "munge"
+  home: "/var/lib/munge"
+  shell: "/usr/sbin/nologin"
+  comment: "Munge Authentication Service"
+  create: true
+
+slurm_user:
+  name: "slurm"
+  uid: 10011
+  gid: 10011
+  group: "slurm"
+  home: "/var/lib/slurm"
+  shell: "/usr/sbin/nologin"
+  comment: "Slurm Workload Manager"
+  create: true
+
+# Shared storage base
+shared_storage_mount: "/data"
+
+# Shared modules/software paths
+# - modules_base_path: root directory for all module-related files
+# - modules_root: alias for modules_base_path (for documentation consistency)
+# - modules_path: where Lmod module files are stored (used in MODULEPATH)
+# - modules_storage_path: where EasyBuild installs software
+# - modules_storage_host: host that manages shared module storage
+modules_base_path: "{{ shared_storage_mount }}/apps"
+modules_root: "{{ modules_base_path }}"
+modules_path: "{{ modules_root }}/modules/all"
+modules_storage_path: "{{ modules_root }}"
+modules_storage_host: "{{ groups['easybuild'][0] | default(groups['slurm-controller'][0] | default('localhost')) }}"
+
+# Control whether EasyHPC creates directories on shared storage
+# Set to false if you manage shared paths externally
+modules_manage_shared_paths: true
+
+# NFS toggles
+nfs_enable_server: true
+nfs_enable_client: true
+
+# Node group helpers (inventory-derived)
+is_slurm_node: "{{ 'slurm-controller' in group_names or 'slurm-node' in group_names or 'slurm-login' in group_names }}"
+is_slurm_controller: "{{ 'slurm-controller' in group_names }}"
+is_slurm_compute: "{{ 'slurm-node' in group_names }}"
+is_slurm_login: "{{ 'slurm-login' in group_names }}"
+
+is_monitoring_node: "{{ 'monitoring' in group_names }}"
+is_logging_node: "{{ 'logging' in group_names }}"
+is_nfs_server: "{{ (nfs_server_group | default('nfs-server')) in group_names }}"
+is_nfs_client: "{{ 'nfs-client' in group_names }}"
+is_ldap_server: "{{ 'ldap' in group_names }}"
+is_easybuild_host: "{{ 'easybuild' in group_names }}"
+
+is_slurm_controller_or_node: "{{ is_slurm_controller or is_slurm_compute }}"
+is_slurm_compute_or_login: "{{ is_slurm_compute or is_slurm_login }}"

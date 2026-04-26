@@ -1,0 +1,128 @@
+---
+# RedHat/CentOS specific tasks for Enroot installation
+
+- name: Determine Enroot RPM EL version (fallback el9 -> el8)
+  ansible.builtin.set_fact:
+    enroot_rpm_el_version: "{{ ansible_facts['distribution_major_version'] if ansible_facts['distribution_major_version'] in ['7','8'] else '8' }}"
+
+- name: Install EPEL repository
+  ansible.builtin.yum:
+    name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ enroot_rpm_el_version }}.noarch.rpm"
+    state: present
+
+- name: Install prerequisites for Enroot
+  ansible.builtin.yum:
+    name:
+      - bash-completion
+      - jq
+      - parallel
+      - pigz
+      - zstd
+    state: present
+
+- name: Gather package facts for comparison
+  ansible.builtin.package_facts:
+    manager: rpm
+  when: enroot_force_reinstall | default(false) | bool
+
+- name: Remove existing enroot package if force reinstall
+  ansible.builtin.yum:
+    name:
+      - enroot
+      - "enroot+caps"
+    state: absent
+  when:
+    - enroot_force_reinstall | default(false) | bool
+    - enroot_version_check.rc == 0
+
+- name: Download Enroot RPM
+  ansible.builtin.get_url:
+    url: "https://github.com/NVIDIA/enroot/releases/download/{{ enroot_version_tag }}/enroot-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    dest: "/tmp/enroot-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    mode: '0644'
+  register: enroot_rpm_download
+  until: enroot_rpm_download is succeeded
+  retries: 3
+  delay: 5
+
+- name: Download Enroot+caps RPM
+  ansible.builtin.get_url:
+    url: "https://github.com/NVIDIA/enroot/releases/download/{{ enroot_version_tag }}/enroot+caps-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    dest: "/tmp/enroot+caps-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    mode: '0644'
+  register: enroot_caps_rpm_download
+  until: enroot_caps_rpm_download is succeeded
+  retries: 3
+  delay: 5
+  ignore_errors: yes
+
+- name: Install Enroot RPM
+  ansible.builtin.yum:
+    name: "/tmp/enroot-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    state: present
+    disable_gpg_check: true
+
+- name: Install Enroot+caps RPM
+  ansible.builtin.yum:
+    name: "/tmp/enroot+caps-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    state: present
+    disable_gpg_check: true
+  when: enroot_caps_rpm_download is succeeded
+  ignore_errors: yes
+
+- name: Clean up downloaded packages
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/tmp/enroot-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+    - "/tmp/enroot+caps-{{ enroot_version_clean }}-1.el{{ enroot_rpm_el_version }}.x86_64.rpm"
+  ignore_errors: yes
+
+- name: Check if kernel unpriv enabled
+  ansible.builtin.shell: "cat /proc/cmdline | grep 'namespace.unpriv_enable=1'"
+  register: kernel_unpriv_enable
+  failed_when: false
+  changed_when: false
+
+- name: Check if user namespaces enabled
+  ansible.builtin.shell: "cat /proc/cmdline | grep 'user_namespace.enable=1'"
+  register: kernel_user_namespace
+  failed_when: false
+  changed_when: false
+
+- name: Install grubby if needed
+  ansible.builtin.yum:
+    name: grubby
+    state: present
+  when: ((kernel_unpriv_enable.rc == 1) or (kernel_user_namespace.rc == 1)) and (enroot_configure_kernel_options | default(true) | bool)
+
+- name: Add kernel options to use enroot
+  ansible.builtin.command: "grubby --update-kernel=ALL --args={{ item }}"
+  when: ((kernel_unpriv_enable.rc == 1) or (kernel_user_namespace.rc == 1)) and (enroot_configure_kernel_options | default(true) | bool)
+  loop:
+    - "namespace.unpriv_enable=1"
+    - "user_namespace.enable=1"
+  ignore_errors: yes
+
+- name: Flag reboot required after Enroot kernel options update
+  ansible.builtin.set_fact:
+    reboot_required: true
+    reboot_message: "{{ reboot_message | default('Rebooting to apply Enroot kernel parameters') }}"
+  when: ((kernel_unpriv_enable.rc == 1) or (kernel_user_namespace.rc == 1)) and (enroot_configure_kernel_options | default(true) | bool)
+
+- name: Set max_user_namespaces
+  ansible.builtin.sysctl:
+    name: user.max_user_namespaces
+    value: "{{ enroot_max_user_namespaces | default(65536) }}"
+    state: present
+    sysctl_set: yes
+    reload: yes
+
+- name: Set max_mnt_namespaces
+  ansible.builtin.sysctl:
+    name: user.max_mnt_namespaces
+    value: "{{ enroot_max_mnt_namespaces | default(65536) }}"
+    state: present
+    sysctl_set: yes
+    reload: yes

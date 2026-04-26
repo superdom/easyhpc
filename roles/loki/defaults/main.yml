@@ -1,0 +1,11 @@
+---
+# Loki defaults
+loki_enabled: false
+loki_version: "2.9.8"
+loki_http_port: 3100
+loki_log_level: "info"
+loki_config_dir: "/etc/loki"
+loki_data_dir: "/var/lib/loki"
+loki_retention_period: "720h"
+loki_uid: 10001
+loki_gid: 10001

@@ -1,0 +1,6 @@
+---
+# HA Slurm role defaults
+
+# High Availability enable toggle
+ha_enabled: false
+slurm_ha_enabled: "{{ ha_enabled | bool }}"

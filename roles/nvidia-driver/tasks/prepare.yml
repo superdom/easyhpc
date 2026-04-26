@@ -1,0 +1,104 @@
+---
+# Prepare system for NVIDIA driver installation
+
+- name: Install required packages (Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - dkms
+      - linux-headers-{{ ansible_facts['kernel'] }}
+      - gnupg
+      - ca-certificates
+      - curl
+      - wget
+      - pciutils
+    state: present
+    update_cache: true
+  when: ansible_facts['distribution'] == 'Ubuntu'
+  retries: 3
+  delay: 10
+  register: ubuntu_deps
+  until: ubuntu_deps is succeeded
+
+- name: Install required packages (RHEL/Rocky)
+  ansible.builtin.dnf:
+    name:
+      - gcc
+      - make
+      - dkms
+      - kernel-devel
+      - kernel-headers
+      - ca-certificates
+      - curl
+      - wget
+      - pciutils
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == 'RedHat'
+  retries: 3
+  delay: 10
+  register: rhel_deps
+  until: rhel_deps is succeeded
+
+- name: Blacklist nouveau driver
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist-nouveau.conf
+    content: |
+      blacklist nouveau
+      options nouveau modeset=0
+    mode: '0644'
+  when: nvidia_driver_blacklist_nouveau
+  notify: Update initramfs for NVIDIA driver
+  register: nouveau_blacklist
+
+- name: Set reboot flag if nouveau blacklist changed
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when:
+    - nvidia_driver_blacklist_nouveau
+    - nouveau_blacklist is defined
+    - nouveau_blacklist.changed
+
+- name: Remove nouveau driver if loaded
+  ansible.builtin.shell: |
+    if lsmod | grep -q nouveau; then
+      rmmod nouveau || echo "Could not unload nouveau, reboot required"
+    fi
+  when:
+    - nvidia_driver_remove_nouveau
+    - nouveau_loaded | default(false)
+  register: nouveau_removal
+  changed_when: "'Could not unload' not in nouveau_removal.stdout"
+  failed_when: false
+
+- name: Set reboot required flag if nouveau couldn't be unloaded
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when:
+    - nouveau_removal is defined
+    - "'stdout' in nouveau_removal"
+    - "'Could not unload' in nouveau_removal.stdout"
+
+- name: Cleanup old NVIDIA drivers (Ubuntu)
+  ansible.builtin.apt:
+    name: "nvidia-*"
+    state: absent
+    purge: true
+  when:
+    - nvidia_driver_cleanup_old_drivers
+    - ansible_facts['distribution'] == 'Ubuntu'
+
+- name: Cleanup old NVIDIA drivers (RHEL/Rocky)
+  ansible.builtin.dnf:
+    name:
+      - "nvidia-*"
+      - "kmod-nvidia-*"
+    state: absent
+  when:
+    - nvidia_driver_cleanup_old_drivers
+    - ansible_facts['os_family'] == 'RedHat'
+
+- name: Set reboot required after cleanup
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when: nvidia_driver_cleanup_old_drivers

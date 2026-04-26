@@ -1,0 +1,11 @@
+---
+# NFS Client role defaults
+
+nfs_server_group: "nfs-server"
+nfs_mount_root: "{{ shared_storage_mount | default('/data') }}"
+nfs_mount_options: "rw,sync,hard,intr,_netdev,nofail,x-systemd.automount"
+nfs_mounts:
+  - mountpoint: "{{ nfs_mount_root }}"
+    server: "{{ (groups[nfs_server_group] | default([]) | first) | default('') }}"
+    path: "{{ nfs_mount_root }}"
+    options: "{{ nfs_mount_options }}"

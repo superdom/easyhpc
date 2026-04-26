@@ -1,0 +1,91 @@
+# {{ ansible_managed }}
+
+{% set al = ansible_facts.get('ansible_local', {}) %}
+{% set topo = al.get('topology', {}) %}
+{% set cpu_topo = topo.get('cpu_topology', {}) %}
+{% set sockets = cpu_topo.get('sockets') %}
+{% set phys = cpu_topo.get('physical_cores') %}
+{% set logical = cpu_topo.get('logical_cpus') %}
+{% set mem_total_mb = ansible_facts.get('memtotal_mb', 0) %}
+{% set gpus_local = al.get('gpus', {}) %}
+{% set gpus_fact = ansible_facts.get('gpus', {}) %}
+{% set inventory_gpu_count = hostvars[inventory_hostname].gpu_count | default(None) %}
+{% set gpu_count = inventory_gpu_count if inventory_gpu_count is not none else (gpus_local.get('count') or gpus_fact.get('count')) %}
+{% set iface_list = (ansible_facts.get('interfaces', [])) | select('match', '(?!^(lo|docker|nodelocaldns)).*') | list %}
+{% set ib_ifaces = (hostvars[inventory_hostname].nhc_ipoib_interfaces | default([], true)) %}
+{% set ib_from_facts = iface_list | select('match', '^ib\\d+') | list %}
+{% set ib_ifaces = (ib_ifaces + ib_from_facts) | unique %}
+{% set ib_devices = (hostvars[inventory_hostname].nhc_ib_devices | default([], true)) %}
+
+#############################################################################
+# Base checks                                                               #
+#############################################################################
+
+# General load/memory/disk sanity
+{% set load_limit = (logical or 1) * 0.95 %}
+{{ inventory_hostname }} || check_ps_loadavg {{ '%.2f' | format(load_limit) }} {{ '%.2f' | format(load_limit) }} {{ '%.2f' | format(load_limit) }}
+{{ inventory_hostname }} || check_fs_used / 95%
+
+# CPU topology (requires ansible_local.topology facts)
+{% if sockets and phys and logical -%}
+{{ inventory_hostname }} || check_hw_cpuinfo {{ sockets }} {{ phys }} {{ logical }}
+{% else -%}
+# {{ inventory_hostname }} || check_hw_cpuinfo <sockets> <phys_cores> <logical_cpus>
+# (Enable topology facts to use this check)
+{% endif %}
+
+# Physical memory bounds (derived from ansible_memtotal_mb)
+{% if mem_total_mb -%}
+{{ inventory_hostname }} || check_hw_physmem {{ (mem_total_mb * 0.95) | round | int }}m {{ (mem_total_mb * 1.05) | round | int }}m
+{% endif %}
+
+# Root filesystem is read/write
+{{ inventory_hostname }} || check_fs_mount_rw /
+
+# Network interfaces up (commented: enable per-site)
+{% for iface in iface_list -%}
+# {{ inventory_hostname }} || check_hw_eth {{ iface }}
+{% endfor %}
+
+# Critical daemons
+{{ inventory_hostname }} || check_ps_service -u root slurmd
+
+#############################################################################
+# GPU-specific checks (gpu_checks.nhc)                                      #
+#############################################################################
+{% if gpu_count %}
+# GPU count matches expectation
+{{ inventory_hostname }} || check_nv_gpu_count {{ gpu_count | int }}
+
+# Driver version check can be enabled to pin a specific version cluster-wide
+# {{ inventory_hostname }} || check_nv_drv_version <driver_version>
+{% if nhc_enable_gpu_retired_pages_check | default(true) -%}
+{{ inventory_hostname }} || check_nv_retired_pages
+{% endif -%}
+{% if nhc_gpu_pcie_width -%}
+{{ inventory_hostname }} || check_nv_pcie_link_width {{ nhc_gpu_pcie_width }}
+{% endif -%}
+{% if nhc_enable_gpu_dcgmi_diag -%}
+{{ inventory_hostname }} || check_nv_dcgmi_diag
+{% endif -%}
+{% if nhc_enable_gpu_xid_check | default(true) -%}
+{{ inventory_hostname }} || check_xid_errors
+{% endif -%}
+{% endif %}
+
+#############################################################################
+# Infiniband checks (ib_checks.nhc)                                         #
+#############################################################################
+{% if ib_ifaces or ib_devices %}
+# IPoIB interfaces should be up
+{% for iface in ib_ifaces -%}
+{{ inventory_hostname }} || check_ipoib_up {{ iface }}
+{% endfor -%}
+
+# Validate link BER using mlxlink (requires Mellanox tools)
+{% if nhc_enable_ib_ber_check | default(true) -%}
+{% for dev in ib_devices -%}
+{{ inventory_hostname }} || check_ib_link_ber {{ dev }}
+{% endfor -%}
+{% endif -%}
+{% endif %}

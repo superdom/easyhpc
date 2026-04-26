@@ -1,0 +1,268 @@
+---
+# NHC (Node Health Check) Role
+
+- name: Gather OS-specific variables
+  ansible.builtin.include_vars:
+    file: "{{ lookup('first_found', nhc_vars_files) }}"
+  vars:
+    nhc_vars_files:
+      files:
+        - "{{ ansible_facts['distribution'] | lower }}-{{ ansible_facts['distribution_version'] }}.yml"
+        - "{{ ansible_facts['distribution'] | lower }}.yml"
+        - "{{ ansible_facts['os_family'] | lower }}.yml"
+        - main.yml
+      paths:
+        - "{{ role_path }}/vars"
+      skip: true
+
+- name: Default to building NHC
+  ansible.builtin.set_fact:
+    nhc_build: true
+
+- name: Check if NHC is already installed
+  ansible.builtin.stat:
+    path: "{{ nhc_bin_path }}"
+  register: nhc_check
+  changed_when: false
+
+- name: Skip build when already installed and not forced
+  ansible.builtin.set_fact:
+    nhc_build: false
+  when:
+    - nhc_check.stat.exists
+    - not nhc_force_reinstall
+
+- name: Install NHC build dependencies
+  ansible.builtin.package:
+    name: "{{ nhc_build_deps }}"
+    state: present
+  when: nhc_build_deps | length > 0
+
+- name: Ensure build directory exists
+  ansible.builtin.file:
+    path: "{{ nhc_build_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: nhc_build
+
+- name: Download NHC source
+  ansible.builtin.get_url:
+    url: "{{ nhc_src_url }}"
+    dest: "{{ nhc_build_dir }}/nhc-{{ nhc_version }}.tar.xz"
+    mode: "0644"
+  when: nhc_build
+
+- name: Extract NHC source
+  ansible.builtin.unarchive:
+    src: "{{ nhc_build_dir }}/nhc-{{ nhc_version }}.tar.xz"
+    dest: "{{ nhc_build_dir }}/"
+    remote_src: true
+  when: nhc_build
+
+- name: Configure NHC
+  ansible.builtin.command: "{{ nhc_configure }}"
+  args:
+    chdir: "{{ nhc_extract_dir }}"
+  when: nhc_build
+
+- name: Test NHC source
+  ansible.builtin.command: "{{ nhc_test }}"
+  args:
+    chdir: "{{ nhc_extract_dir }}"
+  when:
+    - nhc_build
+    - nhc_run_test
+
+- name: Build and install NHC
+  ansible.builtin.command: "{{ nhc_make }}"
+  args:
+    chdir: "{{ nhc_extract_dir }}"
+  when: nhc_build
+
+- name: Ensure NHC configuration directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ nhc_config_dir }}/nhc"
+    - "{{ nhc_config_dir }}/nhc/scripts"
+    - "{{ nhc_libexec_dir }}/nhc"
+
+- name: Collect bundled NHC check scripts
+  ansible.builtin.find:
+    paths: "{{ nhc_extract_dir }}/scripts"
+    patterns: "*.nhc"
+    file_type: file
+  register: nhc_script_files
+  when: nhc_build
+
+- name: Install bundled NHC check scripts
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ nhc_config_dir }}/nhc/scripts/{{ item.path | basename }}"
+    owner: root
+    group: root
+    mode: "0644"
+    remote_src: true
+  loop: "{{ nhc_script_files.files }}"
+  when: nhc_build
+
+- name: Install custom NHC checks
+  ansible.builtin.copy:
+    src: gpu_checks.nhc
+    dest: "{{ nhc_config_dir }}/nhc/scripts/gpu_checks.nhc"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install custom IB checks
+  ansible.builtin.copy:
+    src: ib_checks.nhc
+    dest: "{{ nhc_config_dir }}/nhc/scripts/ib_checks.nhc"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Detect Infiniband devices (ibdev2netdev)
+  ansible.builtin.command: ibdev2netdev
+  register: nhc_ibdev2netdev
+  changed_when: false
+  failed_when: false
+  when: nhc_detect_ib | bool
+
+- name: Record detected Infiniband interfaces for NHC
+  ansible.builtin.set_fact:
+    nhc_ib_devices: "{{ nhc_ibdev2netdev.stdout | regex_findall('(?m)^(\\S+)') | unique }}"
+    nhc_ipoib_interfaces: "{{ nhc_ibdev2netdev.stdout | regex_findall('==>\\s+(\\S+)\\s') | unique }}"
+  when:
+    - nhc_detect_ib | bool
+    - nhc_ibdev2netdev.rc == 0
+    - nhc_ibdev2netdev.stdout | length > 0
+
+- name: Install NHC configuration
+  ansible.builtin.template:
+    src: "{{ nhc_config_template }}"
+    dest: "{{ nhc_conf_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Ensure sysconfig directory exists
+  ansible.builtin.file:
+    path: "{{ nhc_sysconfig_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure NHC sysconfig for SLURM
+  ansible.builtin.template:
+    src: "{{ nhc_sysconfig_template }}"
+    dest: "{{ nhc_sysconfig_dir }}/nhc"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create NHC systemd service
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Node Health Check
+      After=network.target slurmd.service
+      Wants=slurmd.service
+
+      [Service]
+      Type=oneshot
+      ExecStart={{ nhc_bin_path }} -c {{ nhc_conf_path }}
+      StandardOutput=journal
+      StandardError=journal
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: /etc/systemd/system/nhc.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: is_slurm_compute | default(false)
+
+- name: Create NHC timer
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Run NHC periodically
+      Requires=nhc.service
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec={{ nhc_check_interval }}s
+
+      [Install]
+      WantedBy=timers.target
+    dest: /etc/systemd/system/nhc.timer
+    owner: root
+    group: root
+    mode: "0644"
+  when: is_slurm_compute | default(false)
+
+- name: Enable and start NHC timer
+  ansible.builtin.systemd:
+    name: nhc.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: is_slurm_compute | default(false)
+  ignore_errors: true
+  register: nhc_timer_result
+  failed_when: false
+
+- name: Note about NHC timer start
+  ansible.builtin.debug:
+    msg: "NHC timer will be started after SLURM installation"
+  when:
+    - "'slurm-node' in group_names"
+    - nhc_timer_result.failed | default(false)
+
+- name: Check if NHC binary exists
+  ansible.builtin.stat:
+    path: "{{ nhc_bin_path }}"
+  register: nhc_bin_stat
+  when:
+    - nhc_enabled | default(false)
+    - "'slurm-node' in group_names"
+
+- name: Check if NHC build directory exists
+  ansible.builtin.stat:
+    path: "{{ nhc_extract_dir }}"
+  register: nhc_build_dir_stat
+  when:
+    - nhc_enabled | default(false)
+    - "'slurm-node' in group_names"
+
+- name: Detect NHC version
+  ansible.builtin.command: "{{ nhc_bin_path }} --version"
+  register: nhc_version_check
+  changed_when: false
+  failed_when: false
+  when:
+    - nhc_enabled | default(false)
+    - "'slurm-node' in group_names"
+    - nhc_bin_stat.stat.exists | default(false)
+
+- name: Display NHC status
+  ansible.builtin.debug:
+    msg: >-
+      Expected NHC {{ nhc_version }}, detected {{ nhc_version_actual | default('unknown') }} -> {{
+      'OK' if (nhc_version_actual | string).startswith(nhc_version | string) else 'MISMATCH' }}
+  vars:
+    nhc_version_raw: "{{ (nhc_version_check.stdout | default('')) | trim }}"
+    nhc_version_from_bin: "{{ (nhc_version_raw | regex_findall('([0-9]+\\.[0-9]+\\.[0-9]+)') | first) | default('', true) }}"
+    nhc_version_from_dir: "{{ nhc_version if nhc_build_dir_stat.stat.exists | default(false) else '' }}"
+    nhc_version_actual: "{{ nhc_version_from_bin or nhc_version_from_dir or 'Not Installed' }}"
+  when:
+    - nhc_enabled | default(false)
+    - "'slurm-node' in group_names"

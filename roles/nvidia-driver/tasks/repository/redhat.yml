@@ -1,0 +1,20 @@
+---
+# Setup NVIDIA CUDA repository for RHEL/Rocky
+
+- name: Set CUDA repo id
+  ansible.builtin.set_fact:
+    nvidia_driver_rhel_repo_id_effective: "{{ nvidia_driver_rhel_repo_id }}"
+
+- name: Add CUDA repository
+  ansible.builtin.yum_repository:
+    name: cuda
+    description: NVIDIA CUDA Repository
+    baseurl: "{{ nvidia_driver_rhel_cuda_repo_url }}/{{ nvidia_driver_rhel_repo_id_effective }}/x86_64"
+    gpgcheck: true
+    enabled: true
+    gpgkey: "{{ nvidia_driver_rhel_cuda_repo_url }}/{{ nvidia_driver_rhel_repo_id_effective }}/x86_64/D42D0685.pub"
+    module_hotfixes: true
+
+- name: Update dnf cache
+  ansible.builtin.dnf:
+    update_cache: true

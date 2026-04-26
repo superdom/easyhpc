@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+logger -s -t slurm-epilog "START user=${SLURM_JOB_USER:-unknown} job=${SLURM_JOB_ID:-unknown}"
+if [[ -x "{{ slurm_run_parts_path }}" ]]; then
+  "{{ slurm_run_parts_path }}" "{{ slurm_epilog_dir }}"
+fi
+logger -s -t slurm-epilog "END user=${SLURM_JOB_USER:-unknown} job=${SLURM_JOB_ID:-unknown}"

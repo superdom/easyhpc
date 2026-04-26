@@ -1,0 +1,101 @@
+---
+# GPU and driver facts
+
+- name: Initialize reboot flag
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: false
+
+- name: Detect NVIDIA GPU via sysfs
+  ansible.builtin.shell: |
+    for dev in /sys/bus/pci/devices/*; do
+      [ -f "$dev/vendor" ] || continue
+      if grep -q 0x10de "$dev/vendor"; then
+        exit 0
+      fi
+    done
+    exit 1
+  register: nvidia_gpu_sysfs
+  changed_when: false
+  failed_when: false
+
+- name: Set GPU detection fact
+  ansible.builtin.set_fact:
+    nvidia_gpu_detected: "{{ nvidia_gpu_sysfs.rc == 0 }}"
+
+- name: Collect GPU info via lspci (if available)
+  ansible.builtin.shell: |
+    if command -v lspci >/dev/null 2>&1; then
+      lspci -nn | grep -i nvidia
+    fi
+  register: nvidia_gpu_lspci
+  changed_when: false
+  failed_when: false
+  when: nvidia_gpu_detected
+
+- name: Display detected GPU information
+  ansible.builtin.debug:
+    msg: "{{ nvidia_gpu_lspci.stdout_lines if nvidia_gpu_lspci.stdout_lines | length > 0 else 'NVIDIA GPU detected (no lspci output)' }}"
+  when: nvidia_gpu_detected
+
+- name: Detect NVSwitch presence from lspci
+  ansible.builtin.set_fact:
+    nvidia_nvswitch_present: "{{ (nvidia_gpu_lspci.stdout | default('')) is search('NVSwitch') }}"
+  when:
+    - nvidia_gpu_detected
+    - nvidia_gpu_lspci is defined
+
+- name: Derive NVSwitch generation (best-effort)
+  ansible.builtin.set_fact:
+    nvidia_nvswitch_generation_effective: >-
+      {%- set lspci = (nvidia_gpu_lspci.stdout | default('')) -%}
+      {%- if (lspci | regex_search('B200|H200|B300|B100')) -%}
+      4
+      {%- elif (lspci | regex_search('A100')) -%}
+      3
+      {%- else -%}
+      {{ nvidia_nvswitch_generation }}
+      {%- endif -%}
+  when:
+    - nvidia_gpu_detected
+    - nvidia_nvswitch_enabled
+    - nvidia_gpu_lspci is defined
+
+- name: Check if NVIDIA driver is already installed
+  ansible.builtin.shell: |
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi --query-gpu=driver_version --format=csv,noheader
+    else
+      echo "not_installed"
+    fi
+  register: nvidia_current_driver
+  changed_when: false
+  failed_when: false
+  when: nvidia_gpu_detected
+
+- name: Set current driver version fact
+  ansible.builtin.set_fact:
+    nvidia_driver_installed: "{{ nvidia_current_driver.stdout != 'not_installed' and nvidia_current_driver.rc == 0 }}"
+    nvidia_driver_current_version: "{{ nvidia_current_driver.stdout if nvidia_current_driver.rc == 0 and nvidia_current_driver.stdout != 'not_installed' else 'none' }}"
+  when: nvidia_gpu_detected
+
+- name: Display current driver status
+  ansible.builtin.debug:
+    msg:
+      - "NVIDIA Driver installed: {{ nvidia_driver_installed | default(false) }}"
+      - "Current version: {{ nvidia_driver_current_version | default('none') }}"
+  when: nvidia_gpu_detected
+
+- name: Check for nouveau driver
+  ansible.builtin.shell: lsmod | grep -w nouveau
+  register: nouveau_check
+  changed_when: false
+  failed_when: false
+
+- name: Set nouveau status fact
+  ansible.builtin.set_fact:
+    nouveau_loaded: "{{ nouveau_check.rc == 0 }}"
+
+- name: Warning if nouveau is loaded
+  ansible.builtin.debug:
+    msg: "WARNING: Nouveau driver is currently loaded. It will be blacklisted."
+  when: nouveau_loaded

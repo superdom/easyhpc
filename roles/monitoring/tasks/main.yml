@@ -1,0 +1,17 @@
+---
+# Monitoring Role - Prometheus and Grafana (Docker)
+# Only runs on nodes in the 'monitoring' group
+
+- name: Verify this is a monitoring node
+  ansible.builtin.fail:
+    msg: "This role should only run on nodes in the 'monitoring' group"
+  when: not (is_monitoring_node | default(false))
+
+- name: Include Prometheus setup tasks
+  ansible.builtin.include_tasks: prometheus.yml
+
+- name: Include Grafana setup tasks
+  ansible.builtin.include_tasks: grafana.yml
+
+- name: Include Docker Compose setup tasks
+  ansible.builtin.include_tasks: docker_compose.yml

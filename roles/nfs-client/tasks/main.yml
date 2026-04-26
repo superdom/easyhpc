@@ -1,0 +1,87 @@
+---
+# Shared Storage Role
+# Supports NFS (with client installation)
+
+- name: Derive effective NFS mounts
+  ansible.builtin.set_fact:
+    nfs_mounts_effective: >-
+      {{
+        nfs_mounts
+        | default([])
+        | selectattr('server', 'defined')
+        | selectattr('server', 'match', '.+')
+        | list
+      }}
+  when:
+    - nfs_enable_client | default(false) | bool
+
+- name: Install NFS client packages (RedHat)
+  ansible.builtin.package:
+    name:
+      - nfs-utils
+    state: present
+  when:
+    - nfs_enable_client | default(false) | bool
+    - (nfs_mounts_effective | default([])) | length > 0
+    - ansible_facts['os_family'] == "RedHat"
+
+- name: Install NFS client packages (Debian/Ubuntu)
+  ansible.builtin.package:
+    name:
+      - nfs-common
+    state: present
+  when:
+    - nfs_enable_client | default(false) | bool
+    - (nfs_mounts_effective | default([])) | length > 0
+    - ansible_facts['os_family'] == "Debian"
+
+- name: Ensure NFS mount points exist
+  ansible.builtin.file:
+    path: "{{ item.mountpoint }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - nfs_enable_client | default(false) | bool
+    - (nfs_mounts_effective | default([])) | length > 0
+  loop: "{{ nfs_mounts_effective | default([]) }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+
+- name: Mount NFS shares
+  ansible.builtin.mount:
+    path: "{{ item.mountpoint }}"
+    src: "{{ item.server }}:{{ item.path }}"
+    fstype: nfs
+    opts: "{{ item.options | default(nfs_mount_options) }}"
+    state: mounted
+  when:
+    - nfs_enable_client | default(false) | bool
+    - (nfs_mounts_effective | default([])) | length > 0
+  loop: "{{ nfs_mounts_effective | default([]) }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+
+- name: Verify NFS mounts
+  ansible.builtin.command: "findmnt -rn -o FSTYPE,TARGET -T {{ item.mountpoint }}"
+  register: nfs_mounts_check
+  changed_when: false
+  when:
+    - nfs_enable_client | default(false) | bool
+    - (nfs_mounts_effective | default([])) | length > 0
+  loop: "{{ nfs_mounts_effective | default([]) }}"
+  loop_control:
+    label: "{{ item.mountpoint }}"
+
+- name: Display NFS mount status
+  ansible.builtin.debug:
+    msg: >-
+      NFS mount {{ item.item.mountpoint }}: {{
+      'OK' if (item.stdout.split() | last | default('')) == item.item.mountpoint
+      else 'Not mounted' }}
+  when:
+    - nfs_mounts_check is defined
+  loop: "{{ nfs_mounts_check.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.mountpoint }}"

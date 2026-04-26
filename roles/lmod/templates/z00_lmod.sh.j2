@@ -1,0 +1,34 @@
+#!/bin/bash
+# EasyHPC Lmod environment setup sourced for login and batch shells.
+
+LMOD_HOME="{{ lmod_home }}"
+
+export LMOD_CACHED_LOADS="{{ lmod_cache_dir }}/.lmod.cache"
+export LMOD_CACHE_DIR="{{ lmod_cache_dir }}"
+
+if [ "$(id -u)" -ne 0 ]; then
+  export USER="${USER-${LOGNAME}}"
+  export LMOD_sys="$(uname)"
+
+  LMOD_arch="$(uname -m)"
+  if [ "x${LMOD_sys}" = "xAIX" ]; then
+    LMOD_arch="rs6k"
+  fi
+
+  export LMOD_arch
+  export LMOD_SETTARG_CMD=":"
+  export LMOD_FULL_SETTARG_SUPPORT="no"
+  export LMOD_COLORIZE="yes"
+  export LMOD_PREPEND_BLOCK="normal"
+  export MODULEPATH_ROOT="{{ lmod_modules_root }}"
+  export MODULEPATH="{{ lmod_modules_path }}"
+  export MODULESHOME="${LMOD_HOME}"
+  export BASH_ENV="${MODULESHOME}/init/bash"
+
+  if [ -z "${MANPATH}" ]; then
+    export MANPATH=":"
+  fi
+
+  export MANPATH="$(${MODULESHOME}/libexec/addto MANPATH ${MODULESHOME}/share/man)"
+  . "${MODULESHOME}/init/bash" >/dev/null
+fi

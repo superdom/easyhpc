@@ -1,0 +1,12 @@
+services:
+  loki:
+    image: grafana/loki:{{ loki_version }}
+    container_name: loki
+    user: "{{ loki_uid }}:{{ loki_gid }}"
+    ports:
+      - "{{ loki_http_port }}:{{ loki_http_port }}"
+    volumes:
+      - "{{ loki_config_dir }}/loki.yml:/etc/loki/loki.yml:ro"
+      - "{{ loki_data_dir }}:{{ loki_data_dir }}"
+    command: -config.file=/etc/loki/loki.yml
+    restart: unless-stopped

@@ -1,0 +1,28 @@
+---
+- name: restart slurmd
+  ansible.builtin.service:
+    name: "{{ pyxis_slurmd_service_name }}"
+    state: restarted
+  when:
+    - ansible_facts["service_mgr"] == "systemd"
+    - "'slurm-node' in group_names"
+  ignore_errors: true
+
+- name: restart slurmctld
+  ansible.builtin.service:
+    name: "{{ pyxis_slurmctld_service_name }}"
+    state: restarted
+  when:
+    - ansible_facts["service_mgr"] == "systemd"
+    - "'slurm-controller' in group_names"
+  ignore_errors: true
+
+- name: restart slurm daemons
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: restarted
+  loop:
+    - "{{ pyxis_slurmd_service_name }}"
+    - "{{ pyxis_slurmctld_service_name }}"
+  when: ansible_facts["service_mgr"] == "systemd"
+  ignore_errors: true

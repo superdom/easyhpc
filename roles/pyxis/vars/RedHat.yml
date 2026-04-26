@@ -1,0 +1,8 @@
+---
+# SPANK module install path on RedHat/CentOS
+# Package install: /usr/lib64/slurm
+# Source install: {{ slurm_install_prefix }}/lib/slurm
+# Default assumes Slurm is installed from source
+pyxis_spank_module_path: "{{ slurm_install_prefix | default('/usr/local') }}/lib/slurm"
+pyxis_slurmd_service_name: "slurmd"
+pyxis_slurmctld_service_name: "slurmctld"

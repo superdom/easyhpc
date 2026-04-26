@@ -1,0 +1,150 @@
+---
+# Docker Role
+
+- name: Check if Docker is installed
+  ansible.builtin.command: docker --version
+  register: docker_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Parse installed Docker version
+  ansible.builtin.set_fact:
+    docker_installed_version: "{{ (docker_version_check.stdout | default('')) | regex_search('([0-9]+\\.[0-9]+)', '\\1') | default('', true) }}"
+  when: docker_version_check is defined
+
+- name: Determine if Docker needs installation or reinstallation
+  ansible.builtin.set_fact:
+    docker_version_mismatch: "{{ (docker_installed_version | default('')) != '' and not (docker_installed_version | string).startswith(docker_version | string) }}"
+    docker_needs_install: "{{ (docker_force_reinstall | default(false) | bool) or (docker_version_check.rc != 0) or (docker_version_mismatch | default(false)) }}"
+
+- name: Uninstall existing Docker if force reinstall (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: absent
+  when:
+    - ansible_facts["os_family"] == "Debian"
+    - docker_needs_install | default(true) | bool
+    - docker_version_check.rc == 0
+
+- name: Uninstall existing Docker if force reinstall (RedHat)
+  ansible.builtin.yum:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+    state: absent
+  when:
+    - ansible_facts["os_family"] == "RedHat"
+    - docker_needs_install | default(true) | bool
+    - docker_version_check.rc == 0
+
+- name: Pin Docker packages to {{ docker_version }} (Debian/Ubuntu)
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/docker-ce-pin
+    content: |
+      Package: docker-ce
+      Pin: version 5:{{ docker_version }}*
+      Pin-Priority: 1001
+
+      Package: docker-ce-cli
+      Pin: version 5:{{ docker_version }}*
+      Pin-Priority: 1001
+
+      Package: docker-ce-rootless-extras
+      Pin: version 5:{{ docker_version }}*
+      Pin-Priority: 1001
+
+      Package: containerd.io
+      Pin: version {{ containerd_version | default('1.6') }}*
+      Pin-Priority: 1001
+  when:
+    - ansible_facts["os_family"] == "Debian"
+    - docker_needs_install | default(true) | bool
+
+- name: Install prerequisites for Docker (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Download Docker GPG key (Debian/Ubuntu)
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /usr/share/keyrings/docker-ce.asc
+    mode: '0644'
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Dearmor Docker GPG key (Debian/Ubuntu)
+  ansible.builtin.command: gpg --dearmor -o /usr/share/keyrings/docker-ce.gpg /usr/share/keyrings/docker-ce.asc
+  args:
+    creates: /usr/share/keyrings/docker-ce.gpg
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Add Docker repository (Debian/Ubuntu)
+  ansible.builtin.apt_repository:
+    repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-ce.gpg] https://download.docker.com/linux/ubuntu {{ ansible_facts[\"distribution_release\"] }} stable"
+    state: present
+    update_cache: true
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Install Docker repository (RedHat)
+  ansible.builtin.yum_repository:
+    name: docker-ce
+    description: Docker CE Repository
+    baseurl: "{{ docker_repository_url[ansible_facts[\"os_family\"]] }}"
+    gpgcheck: yes
+    gpgkey: https://download.docker.com/linux/centos/gpg
+  when: ansible_facts["os_family"] == "RedHat"
+
+- name: Install Docker from package
+  ansible.builtin.package:
+    name:
+      - "{{ 'docker-ce-' ~ docker_version ~ '*' if ansible_facts['os_family']=='RedHat' else 'docker-ce' }}"
+      - "{{ 'docker-ce-cli-' ~ docker_version ~ '*' if ansible_facts['os_family']=='RedHat' else 'docker-ce-cli' }}"
+      - "containerd.io"
+    state: present
+    allow_downgrade: true
+  when: docker_needs_install | default(true)
+
+- name: Create Docker daemon config directory
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure Docker daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart docker
+
+- name: Start and enable containerd service
+  ansible.builtin.systemd:
+    name: containerd
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Start and enable Docker service
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Verify Docker installation
+  ansible.builtin.command: docker info
+  register: docker_info
+  changed_when: false

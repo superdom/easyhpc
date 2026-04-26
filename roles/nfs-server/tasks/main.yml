@@ -1,0 +1,61 @@
+---
+# NFS Server Role
+# Installs and configures NFS server
+
+- name: Install NFS server packages (RedHat)
+  ansible.builtin.package:
+    name: nfs-utils
+    state: present
+  when: ansible_facts["os_family"] == "RedHat"
+
+- name: Install NFS server packages (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: nfs-kernel-server
+    state: present
+    update_cache: true
+  when: ansible_facts["os_family"] == "Debian"
+
+- name: Ensure NFS export directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ nfs_exports | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when: (nfs_exports | default([])) | length > 0
+
+- name: Configure NFS exports
+  ansible.builtin.template:
+    src: exports.j2
+    dest: /etc/exports
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart nfs server
+
+- name: Ensure NFS services are enabled and started
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - rpcbind
+    - "{{ 'nfs-server' if ansible_facts['os_family'] == 'RedHat' else 'nfs-kernel-server' }}"
+  notify: restart nfs server
+
+- name: Export NFS shares
+  ansible.builtin.command: exportfs -ra
+  changed_when: true
+
+- name: Display NFS exports
+  ansible.builtin.command: exportfs -v
+  register: nfs_exports_output
+  changed_when: false
+
+- name: Show NFS exports
+  ansible.builtin.debug:
+    msg: "{{ nfs_exports_output.stdout_lines }}"

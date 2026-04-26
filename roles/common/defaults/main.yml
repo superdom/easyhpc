@@ -1,0 +1,98 @@
+---
+# Common role defaults
+# These are the base defaults that can be overridden in group_vars or host_vars
+
+# Service user defaults (can be overridden in group_vars/all.yml)
+munge_user:
+  name: "munge"
+  uid: 10010
+  gid: 10010
+  group: "munge"
+  home: "/var/lib/munge"
+  shell: "/usr/sbin/nologin"
+  comment: "Munge Authentication Service"
+  create: true
+
+slurm_user:
+  name: "slurm"
+  uid: 10011
+  gid: 10011
+  group: "slurm"
+  home: "/var/lib/slurm"
+  shell: "/usr/sbin/nologin"
+  comment: "Slurm Workload Manager"
+  create: true
+
+# System settings
+reboot_required: false
+reboot_timeout: 600
+firewall_enabled: false
+
+# System packages
+system_packages:
+  RedHat:
+    - "epel-release"
+    - "vim"
+    - "tree"
+    - "tmux"
+    - "htop"
+    - "git"
+    - "net-tools"
+    - "nfs-utils"
+    - "chrony"
+    - "bzip2"
+    - "lbzip2"
+    - "gzip"
+    - "xz"
+    - "zstd"
+    - "unzip"
+    - "zip"
+  Debian:
+    - "vim"
+    - "tree"
+    - "tmux"
+    - "htop"
+    - "git"
+    - "net-tools"
+    - "nfs-common"
+    - "chrony"
+    - "bzip2"
+    - "lbzip2"
+    - "gzip"
+    - "xz-utils"
+    - "zstd"
+    - "unzip"
+    - "zip"
+
+# Munge packages (installed only on SLURM-related nodes)
+munge_packages:
+  RedHat:
+    - "munge"
+    - "munge-devel"
+  Debian:
+    - "munge"
+    - "libmunge-dev"
+
+# RedHat repository
+# - rhui: cloud images using RHUI repos (e.g., AWS/GCP/Azure). Requires enabling codeready-builder-for-rhel-<ver>-rhui-rpms.
+# - onprem: registered systems using subscription-manager. Requires enabling codeready-builder-for-rhel-<ver>-<arch>-rpms or CRB/PowerTools.
+# Override per inventory/group when needed.
+rhel_repo_flavor: "rhui"
+
+# Repo IDs to enable per flavor (templated with facts at runtime)
+rhel_repo_ids:
+  rhui:
+    - "codeready-builder-for-rhel-{{ ansible_facts['distribution_major_version'] }}-rhui-rpms"
+  onprem:
+    - "codeready-builder-for-rhel-{{ ansible_facts['distribution_major_version'] }}-{{ ansible_facts['architecture'] }}-rpms"
+    - "crb"
+    - "powertools"
+
+# Cluster identity
+cluster_name: "easyhpc-cluster"
+cluster_description: "EasyHPC SLURM Cluster"
+
+# Network
+dns_servers:
+  - "8.8.8.8"
+  - "8.8.4.4"

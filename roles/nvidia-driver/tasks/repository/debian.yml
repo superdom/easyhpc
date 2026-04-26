@@ -1,0 +1,36 @@
+---
+# Setup NVIDIA CUDA repository for Ubuntu
+
+- name: Set Ubuntu repo identifier
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_repo_id: "ubuntu{{ ansible_facts['distribution_version'] | replace('.', '') }}"
+
+- name: Set CUDA keyring URL (default)
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_keyring_url_effective: "{{ nvidia_driver_ubuntu_cuda_repo_url }}/{{ nvidia_driver_ubuntu_repo_id }}/x86_64/cuda-keyring_1.1-1_all.deb"
+  when: nvidia_driver_ubuntu_cuda_keyring_url | length == 0
+
+- name: Set CUDA keyring URL (override)
+  ansible.builtin.set_fact:
+    nvidia_driver_ubuntu_keyring_url_effective: "{{ nvidia_driver_ubuntu_cuda_keyring_url }}"
+  when: nvidia_driver_ubuntu_cuda_keyring_url | length > 0
+
+- name: Download CUDA keyring package
+  ansible.builtin.get_url:
+    url: "{{ nvidia_driver_ubuntu_keyring_url_effective }}"
+    dest: /tmp/cuda-keyring.deb
+    mode: '0644'
+
+- name: Install CUDA keyring package
+  ansible.builtin.apt:
+    deb: /tmp/cuda-keyring.deb
+    state: present
+
+- name: Update apt cache after adding repository
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Cleanup keyring package
+  ansible.builtin.file:
+    path: /tmp/cuda-keyring.deb
+    state: absent

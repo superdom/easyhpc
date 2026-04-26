@@ -1,0 +1,72 @@
+---
+# Preflight: validation
+
+- name: Validate supported OS
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_version'] in ['22.04', '24.04'] or
+        (ansible_facts['distribution'] in ['RedHat', 'Rocky'] and ansible_facts['distribution_major_version'] == '9')
+    fail_msg: "Unsupported OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+    success_msg: "OS validation passed: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+
+- name: Validate supported architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] == 'x86_64'
+    fail_msg: "Only x86_64 architecture is supported"
+
+- name: Check mokutil availability
+  ansible.builtin.command: which mokutil
+  register: nvidia_mokutil_check
+  changed_when: false
+  failed_when: false
+
+- name: Check Secure Boot state (if mokutil is available)
+  ansible.builtin.command: mokutil --sb-state
+  register: nvidia_secure_boot_state
+  changed_when: false
+  failed_when: false
+  when: nvidia_mokutil_check.rc == 0
+
+- name: Set Secure Boot fact
+  ansible.builtin.set_fact:
+    nvidia_secure_boot_enabled: "{{ (nvidia_secure_boot_state.stdout | default('') | lower) is search('enabled') }}"
+  when: nvidia_mokutil_check.rc == 0
+
+- name: Fail if Secure Boot is enabled
+  ansible.builtin.fail:
+    msg: "Secure Boot is enabled. NVIDIA driver modules may not load unless they are signed or enrolled via MOK."
+  when:
+    - nvidia_secure_boot_enabled | default(false)
+    - nvidia_driver_secure_boot_policy == 'fail'
+
+- name: Warn if Secure Boot is enabled
+  ansible.builtin.debug:
+    msg: "WARNING: Secure Boot is enabled. NVIDIA driver modules may not load unless they are signed or enrolled via MOK."
+  when:
+    - nvidia_secure_boot_enabled | default(false)
+    - nvidia_driver_secure_boot_policy == 'warn'
+
+- name: Validate driver strategy
+  ansible.builtin.assert:
+    that:
+      - nvidia_driver_strategy in ['latest', 'branch', 'specific']
+    fail_msg: "Invalid driver strategy: {{ nvidia_driver_strategy }}"
+
+- name: Validate specific version when strategy is specific
+  ansible.builtin.assert:
+    that:
+      - nvidia_driver_version | length > 0
+    fail_msg: "nvidia_driver_version must be set when strategy is 'specific'"
+  when: nvidia_driver_strategy == 'specific'
+
+- name: Validate branch when strategy is branch
+  ansible.builtin.assert:
+    that:
+      - nvidia_driver_branch | length > 0
+    fail_msg: "nvidia_driver_branch must be set when strategy is 'branch'"
+  when: nvidia_driver_strategy == 'branch'
+
+- name: Initialize reboot flag
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: false

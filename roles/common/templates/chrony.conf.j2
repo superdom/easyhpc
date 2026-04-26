@@ -1,0 +1,27 @@
+# Use public servers from the pool.ntp.org project
+pool 2.pool.ntp.org iburst
+
+# Record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# Allow the system clock to be stepped in the first three updates
+makestep 1.0 3
+
+# Enable kernel synchronization of the real-time clock (RTC)
+rtcsync
+
+# Specify the file containing keys for NTP authentication
+keyfile /etc/chrony.keys
+
+# Save system time periodically to RTC
+local stratum 10
+
+# Allow NTP client access from local network (guarded for missing facts)
+{% if ansible_facts.get('default_ipv4') and ansible_facts['default_ipv4'].get('network') and ansible_facts['default_ipv4'].get('prefix') %}
+allow {{ ansible_facts['default_ipv4']['network'] }}/{{ ansible_facts['default_ipv4']['prefix'] }}
+{% else %}
+# allow 0.0.0.0/0
+{% endif %}
+
+# Log location
+logdir /var/log/chrony

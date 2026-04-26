@@ -1,0 +1,74 @@
+---
+# RedHat/CentOS specific tasks
+
+- name: Set EPEL release URL
+  ansible.builtin.set_fact:
+    epel_release_url: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ ansible_facts['distribution_major_version'] }}.noarch.rpm"
+    epel_release_dest: "/tmp/epel-release-latest-{{ ansible_facts['distribution_major_version'] }}.noarch.rpm"
+    epel_gpg_key_url: "https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-{{ ansible_facts['distribution_major_version'] }}"
+    epel_gpg_key_dest: "/tmp/RPM-GPG-KEY-EPEL-{{ ansible_facts['distribution_major_version'] }}"
+
+- name: Select repos to enable (explicit flavor switch)
+  ansible.builtin.set_fact:
+    rhel_repos_to_enable: "{{ rhel_repo_ids[rhel_repo_flavor] | default([]) }}"
+
+- name: Fail if repo flavor is unknown or has no repos
+  ansible.builtin.assert:
+    that:
+      - rhel_repos_to_enable | length > 0
+    fail_msg: "rhel_repo_flavor '{{ rhel_repo_flavor }}' is not defined or has no repos. Set rhel_repo_flavor to 'rhui' or 'onprem' (override in group vars or roles/common/defaults/main.yml)."
+
+- name: Enable CRB/CodeReady Builder or PowerTools
+  ansible.builtin.command: "dnf config-manager --set-enabled {{ item }}"
+  loop: "{{ rhel_repos_to_enable }}"
+  register: repo_enable
+  changed_when: "'enabled' in (repo_enable.stdout | default('')) or 'enabled' in (repo_enable.stderr | default(''))"
+
+- name: Download EPEL GPG key
+  ansible.builtin.get_url:
+    url: "{{ epel_gpg_key_url }}"
+    dest: "{{ epel_gpg_key_dest }}"
+    mode: "0644"
+    timeout: "{{ epel_gpg_key_timeout | default(30) }}"
+  register: epel_gpg_download
+  retries: "{{ epel_gpg_key_retries | default(5) }}"
+  delay: "{{ epel_gpg_key_delay | default(10) }}"
+  until: epel_gpg_download is succeeded
+
+- name: Import EPEL GPG key
+  ansible.builtin.rpm_key:
+    state: present
+    key: "{{ epel_gpg_key_dest }}"
+
+- name: Download EPEL release RPM
+  ansible.builtin.get_url:
+    url: "{{ epel_release_url }}"
+    dest: "{{ epel_release_dest }}"
+    mode: "0644"
+    timeout: "{{ epel_release_timeout | default(30) }}"
+  register: epel_release_download
+  retries: "{{ epel_release_retries | default(5) }}"
+  delay: "{{ epel_release_delay | default(10) }}"
+  until: epel_release_download is succeeded
+
+- name: Install EPEL repository
+  ansible.builtin.package:
+    # Installing directly from the official URL avoids failures when epel-release
+    # is not present in the default repos.
+    name: "{{ epel_release_dest }}"
+    state: present
+
+- name: Update system packages
+  ansible.builtin.yum:
+    name: "*"
+    state: latest
+    update_cache: true
+  ignore_errors: true
+
+- name: Disable firewalld (firewall off for EasyHPC)
+  ansible.builtin.systemd:
+    name: firewalld
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: not (firewall_enabled | default(false) | bool)

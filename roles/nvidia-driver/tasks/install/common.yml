@@ -1,0 +1,10 @@
+---
+# Install: common facts
+
+- name: Derive effective driver branch
+  ansible.builtin.set_fact:
+    nvidia_driver_branch_effective: "{{ nvidia_driver_branch if nvidia_driver_strategy in ['branch', 'latest'] else (nvidia_driver_version.split('.')[0] if nvidia_driver_version | length > 0 else nvidia_driver_branch) }}"
+
+- name: Parse driver branch number
+  ansible.builtin.set_fact:
+    nvidia_driver_branch_int: "{{ (nvidia_driver_branch_effective | regex_search('^[0-9]+') | default('0', true)) | int }}"

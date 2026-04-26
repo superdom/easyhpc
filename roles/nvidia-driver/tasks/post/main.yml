@@ -1,0 +1,11 @@
+---
+# Post orchestration
+
+- name: Configure services and driver options
+  ansible.builtin.include_tasks: post/configure.yml
+
+- name: Reboot handling
+  ansible.builtin.include_tasks: post/reboot.yml
+
+- name: Validate driver and GPUDirect modules
+  ansible.builtin.include_tasks: post/validate.yml

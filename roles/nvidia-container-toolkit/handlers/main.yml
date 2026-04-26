@@ -1,0 +1,14 @@
+---
+# NVIDIA Container Toolkit handlers
+
+- name: Restart Docker service for NVIDIA runtime
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+  when: nvidia_container_toolkit_restart_runtime | default(true)
+
+- name: Restart containerd service for NVIDIA runtime
+  ansible.builtin.systemd:
+    name: containerd
+    state: restarted
+  when: nvidia_container_toolkit_restart_runtime | default(true)

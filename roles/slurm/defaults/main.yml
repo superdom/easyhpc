@@ -1,0 +1,241 @@
+---
+# Slurm Role Defaults
+
+# Slurm version
+slurm_version: "25.05.0"
+
+# Installation prefix
+slurm_install_prefix: "/usr/local"
+
+# PMIx installation prefix (source build)
+pmix_install_prefix: "/opt/hpc/stack/pmix"
+
+# HWLOC installation prefix (source build)
+hwloc_install_prefix: "/opt/hpc/stack/hwloc"
+
+# Directory paths (defaults - can be overridden in group_vars/slurm.yml)
+slurm_config_dir: "/etc/slurm"
+slurm_log_dir: "/var/log/slurm"
+slurm_spool_dir: "/var/spool/slurm"
+slurm_run_dir: "/run/slurm"
+
+# Port defaults (can be overridden in group_vars/slurm.yml)
+slurm_controller_port: 6817
+slurm_node_port: 6818
+slurm_dbd_port: 6819
+
+# Controller discovery / HA helpers
+slurmctld_hosts: "{{ groups['slurm-controller'] | default([]) }}"
+slurm_ha_enabled: "{{ ha_enabled | default(false) | bool }}"
+slurm_state_save_location_single: "{{ slurm_spool_dir }}/slurmctld"
+slurm_state_save_location_ha: "{{ shared_storage_mount | default('/data') }}/.slurm_state"
+slurm_state_save_location: "{{ (slurm_ha_enabled | bool) | ternary(slurm_state_save_location_ha, slurm_state_save_location_single) }}"
+slurm_backup_controller: "{{ ((slurmctld_hosts | length) > 1) | ternary(slurmctld_hosts[1], '') }}"
+
+# Build directory for source installation
+slurm_build_dir: "/tmp/slurm-build"
+
+# SLURM build dependencies (OS-specific)
+slurm_build_dependencies:
+  RedHat:
+    - "gcc"
+    - "gcc-c++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkgconfig"
+    - "openssl-devel"
+    - "pam-devel"
+    - "perl-ExtUtils-MakeMaker"
+    - "readline-devel"
+    - "zlib-devel"
+    - "bzip2-devel"
+    - "libssh2-devel"
+    - "ncurses-devel"
+    - "libbpf-devel"
+    - "dbus-devel"
+    - "perl-devel"
+    - "python3-devel"
+    - "mariadb-devel"
+    - "munge-devel"
+    - "numactl-devel"
+    - "hwloc-devel"
+    - "lua-devel"
+    - "rpm-build"
+    - "rpmdevtools"
+  Debian:
+    - "gcc"
+    - "g++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkg-config"
+    - "libssl-dev"
+    - "libpam0g-dev"
+    - "libreadline-dev"
+    - "zlib1g-dev"
+    - "libbz2-dev"
+    - "libssh2-1-dev"
+    - "libncurses5-dev"
+    - "libperl-dev"
+    - "libbpf-dev"
+    - "libdbus-1-dev"
+    - "python3-dev"
+    - "libmariadb-dev"
+    - "libmunge-dev"
+    - "libnuma-dev"
+    - "libhwloc-dev"
+    - "liblua5.3-dev"
+    - "rpm"
+    - "rpm2cpio"
+
+# NVML development headers (only needed when building with --with-nvml)
+# Override per OS if needed.
+slurm_nvml_dev_packages:
+  Debian:
+    - "libnvidia-ml-dev"
+  RedHat: []
+
+# Source URL
+slurm_source_url: "https://download.schedmd.com/slurm/slurm-{{ slurm_version }}.tar.bz2"
+
+# Configure options for source build
+slurm_configure_options: "--prefix={{ slurm_install_prefix }} --sysconfdir={{ slurm_config_dir }} --disable-dependency-tracking --disable-x11 --enable-pam --with-munge --with-hdf5=no --enable-cgroup --with-hwloc={{ hwloc_install_prefix }} --enable-lua --with-numa --with-ssl --with-bpf --with-dbus --with-pmix={{ pmix_install_prefix }}"
+
+# NVML prefix (used when building Slurm with --with-nvml)
+slurm_nvml_prefix: "/usr"
+
+# User and group configuration
+slurm_user:
+  name: "slurm"
+  uid: 10011
+  gid: 10011
+  group: "slurm"
+  home: "/var/lib/slurm"
+  shell: "/usr/sbin/nologin"
+  comment: "Slurm Workload Manager"
+  create: true
+
+# Node roles: ['controller'], ['exec'], ['dbd'], or combinations
+# Can also use groups: slurmservers, slurmexechosts, slurmdbdservers
+slurm_roles: []
+
+# Main slurm.conf configuration defaults (hash of key-value pairs)
+slurm_config_defaults:
+  ClusterName: "{{ cluster_name | default('easyhpc-cluster') }}"
+  SlurmctldHost: "{{ slurmctld_hosts[0] | default(groups['slurm-controller'][0] | default('localhost')) }}"
+  SlurmUser: "{{ slurm_user.name }}"
+  SlurmctldPort: "{{ slurm_controller_port }}"
+  SlurmdPort: "{{ slurm_node_port }}"
+  AuthType: "auth/munge"
+  SlurmctldLogFile: "{{ slurm_log_dir }}/slurmctld.log"
+  SlurmdLogFile: "{{ slurm_log_dir }}/slurmd.log"
+  SlurmctldDebug: "info"
+  SlurmdDebug: "info"
+  SlurmctldPidFile: "{{ slurm_run_dir }}/slurmctld.pid"
+  SlurmdPidFile: "{{ slurm_run_dir }}/slurmd.pid"
+  StateSaveLocation: "{{ slurm_state_save_location | default(slurm_spool_dir + '/slurmctld') }}"
+  PluginDir: "{{ slurm_install_prefix }}/lib/slurm"
+  SlurmctldParameters: "enable_configless"
+  SlurmdParameters: "enable_configless"
+  SlurmdSpoolDir: "{{ slurm_spool_dir }}/slurmd"
+  SchedulerType: "sched/backfill"
+  SelectType: "select/cons_tres"
+  SelectTypeParameters: "CR_Core_Memory,CR_CORE_DEFAULT_DIST_BLOCK,CR_ONE_TASK_PER_CORE"
+  ProctrackType: "proctrack/cgroup"
+  TaskPlugin: "task/affinity,task/cgroup"
+  JobAcctGatherType: "jobacct_gather/cgroup"
+  JobAcctGatherFrequency: 30
+  AccountingStorageType: "{{ (slurm_accounting_enabled | default(false) | bool) | ternary('accounting_storage/slurmdbd', 'accounting_storage/none') }}"
+  AccountingStorageHost: "{{ groups['slurm-controller'][0] | default('localhost') }}"
+  AccountingStorageUser: "{{ slurm_user.name }}"
+  JobCompType: "jobcomp/filetxt"
+  JobCompLoc: "{{ slurm_log_dir }}/jobcomp"
+  SlurmctldTimeout: 300
+  SlurmdTimeout: 300
+  PlugStackConfig: "{{ slurm_config_dir }}/plugstack.conf"
+  GresTypes: "gpu"
+  Prolog: "{{ slurm_prolog_path }}"
+  Epilog: "{{ slurm_epilog_path }}"
+
+# Optional overrides in inventory/group vars
+slurm_config: "{{ slurm_config_defaults }}"
+
+# GPU configuration
+# - slurm_enable_nvml: Enable NVML support in Slurm build (--with-nvml flag)
+# - slurm_autodetect_nvml: Use AutoDetect=nvml in gres.conf for automatic GPU discovery
+#   When true, Slurm uses NVML library to detect GPUs at runtime (recommended for GPU clusters)
+#   When false, gres.conf uses manual configuration from gpu_count/gpu_topology facts
+slurm_enable_nvml: "{{ (gpu_count | default(0) | int) > 0 }}"
+slurm_autodetect_nvml: "{{ slurm_enable_nvml }}"
+
+# Prolog/Epilog configuration
+slurm_prolog_enabled: true
+slurm_epilog_enabled: true
+slurm_prolog_path: "{{ slurm_config_dir }}/prolog.sh"
+slurm_epilog_path: "{{ slurm_config_dir }}/epilog.sh"
+slurm_prolog_dir: "{{ slurm_config_dir }}/prolog.d"
+slurm_epilog_dir: "{{ slurm_config_dir }}/epilog.d"
+slurm_run_parts_path: "{{ slurm_config_dir }}/scripts/run-parts.sh"
+slurm_job_tmp_dir: "{{ slurm_spool_dir }}/tmp"
+
+# Nodes configuration (list of hashes)
+# Each hash should have 'name' key, other keys become NodeName parameters
+slurm_nodes: []
+
+# Partitions configuration (list of hashes)
+# Each hash should have 'name' key, other keys become PartitionName parameters
+slurm_partitions:
+  - name: "debug"
+    Nodes: "ALL"
+    Default: "YES"
+    MaxTime: "UNLIMITED"
+    State: "UP"
+
+# Cgroup configuration (hash)
+slurm_cgroup_config:
+  CgroupPlugin: "autodetect"
+  ConstrainCores: "yes"
+  ConstrainRAMSpace: "yes"
+  ConstrainSwapSpace: "yes"
+  ConstrainDevices: "yes"
+
+# GRES configuration (list of hashes)
+slurm_gres_config: []
+
+# Accounting gather configuration (hash)
+slurm_acct_gather_config: {}
+
+# Database daemon configuration
+# Note: Set to true only if MySQL/MariaDB is installed and configured
+slurm_accounting_enabled: false
+slurm_db_config:
+  StorageType: "accounting_storage/mysql"
+  StorageHost: "localhost"
+  StorageUser: "{{ slurm_user.name }}"
+  StoragePass: "changeme"
+  StorageLoc: "slurm_acct_db"
+  DbdHost: "localhost"
+  DbdAddr: "localhost"
+  DebugLevel: "info"
+  LogFile: "{{ slurm_log_dir }}/slurmdbd.log"
+  PidFile: "{{ slurm_run_dir }}/slurmdbd.pid"
+  PurgeEventAfter: 172800
+  PurgeJobAfter: 2592000
+  PurgeStepAfter: 604800
+
+# StateSaveLocation cleanup (disabled by default; enable for fresh init only)
+slurm_state_cleanup: false
+
+# Upgrade flag
+# Set to true to upgrade existing SLURM installation
+# When enabled, services will be stopped before upgrade and reinstalled
+# Configuration files and data are preserved
+slurm_upgrade: false
+
+# Force rebuild flag
+# Set to true to force recompilation and reinstallation even if SLURM is already installed
+# Similar to slurm_upgrade but without the service stop step
+slurm_force_rebuild: false

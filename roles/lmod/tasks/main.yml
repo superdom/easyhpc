@@ -1,0 +1,170 @@
+---
+# Lmod Role
+
+- name: Install Lmod dependencies
+  ansible.builtin.package:
+    name:
+      - bc
+      - lua
+      - lua-devel
+      - lua-filesystem
+      - lua-posix
+      - tcl
+      - tcl-devel
+      - environment-modules
+    state: present
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install Lmod dependencies (Debian)
+  ansible.builtin.package:
+    name:
+      - bc
+      - lua5.3
+      - liblua5.3-dev
+      - lua-posix
+      - tcl
+      - tcl-dev
+      - environment-modules
+    state: present
+  when: ansible_facts['os_family'] == "Debian"
+
+- name: Create shared Lmod directories on slurm-controller
+  when:
+    - lmod_manage_shared_paths | bool
+    - inventory_hostname == ((groups['slurm-controller'] | default([]) | first) | default(inventory_hostname))
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ lmod_directory_owner }}"
+    group: "{{ lmod_directory_group }}"
+    mode: "{{ lmod_directory_mode }}"
+  loop:
+    - "{{ lmod_storage_path }}/modules"
+    - "{{ lmod_storage_path }}/modules/all"
+    - "{{ lmod_storage_path }}/modules/cache"
+
+- name: Create shared Lmod directories locally
+  when: not lmod_manage_shared_paths | bool
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ lmod_directory_owner }}"
+    group: "{{ lmod_directory_group }}"
+    mode: "{{ lmod_directory_mode }}"
+  loop:
+    - "{{ lmod_modules_root }}"
+    - "{{ lmod_modules_path }}"
+    - "{{ lmod_cache_dir }}"
+
+- name: Create local Lmod install directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ lmod_install_prefix }}"
+    - "{{ lmod_install_base }}"
+
+- name: Check for legacy Lmod home directory blocking symlink
+  ansible.builtin.stat:
+    path: "{{ lmod_home }}"
+  register: lmod_home_stat
+
+- name: Remove legacy Lmod home directory
+  ansible.builtin.file:
+    path: "{{ lmod_home }}"
+    state: absent
+  when:
+    - lmod_home_stat.stat.exists
+    - not lmod_home_stat.stat.islnk | default(false)
+
+- name: Remove git lock file if exists
+  ansible.builtin.file:
+    path: /tmp/lmod/.git/index.lock
+    state: absent
+  ignore_errors: true
+
+- name: Download Lmod
+  ansible.builtin.git:
+    repo: https://github.com/TACC/Lmod.git
+    dest: /tmp/lmod
+    version: "{{ lmod_version }}"
+    force: yes
+
+- name: Check if Lmod is already installed
+  ansible.builtin.stat:
+    path: "{{ lmod_home }}/libexec/lmod"
+  register: lmod_installed
+
+- name: Build and install Lmod
+  ansible.builtin.shell: |
+    cd /tmp/lmod && \
+    ./configure --prefix={{ lmod_install_base }} && \
+    make && \
+    make install
+  args:
+    creates: "{{ lmod_home }}/libexec/lmod"
+  when: not lmod_installed.stat.exists
+
+- name: Deploy Lmod profile script
+  ansible.builtin.template:
+    src: z00_lmod.sh.j2
+    dest: /etc/profile.d/z00_lmod.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create Lmod cache directory
+  when: not lmod_manage_shared_paths | bool
+  ansible.builtin.file:
+    path: "{{ lmod_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Find Lmod installation path
+  ansible.builtin.shell: find {{ lmod_install_base }} -name "update_lmod_system_cache_files" -type f | head -1
+  register: lmod_cache_path
+  changed_when: false
+  failed_when: false
+
+- name: Initialize Lmod cache
+  ansible.builtin.shell: |
+    export LMOD_CACHE_DIR={{ lmod_cache_dir }}
+    {{ lmod_cache_path.stdout | dirname }}/update_lmod_system_cache_files -t {{ lmod_cache_dir }} {{ lmod_modules_path }}
+  args:
+    creates: "{{ lmod_cache_dir }}/.lmod.cache"
+  changed_when: false
+  failed_when: false
+  when: lmod_cache_path.stdout != ""
+
+- name: Check if Lmod install directory exists
+  ansible.builtin.stat:
+    path: "{{ lmod_install_base }}/lmod/{{ lmod_version }}/"
+  register: lmod_install_dir
+  when: lmod_enabled | default(false)
+
+- name: Detect Lmod version from fixed install directory
+  ansible.builtin.shell: |
+    if [ -d "{{ lmod_install_base }}/lmod/{{ lmod_version }}/" ]; then
+      echo "{{ lmod_version }}"
+    else
+      exit 1
+    fi
+  register: lmod_version_check
+  changed_when: false
+  failed_when: false
+  when: lmod_enabled | default(false)
+
+- name: Report Lmod version
+  ansible.builtin.debug:
+    msg: >-
+      Expected Lmod {{ lmod_version }}, detected {{ lmod_version_actual | default('unknown') }} -> {{
+      'OK' if (lmod_version_actual | string).startswith(lmod_version | string) else 'MISMATCH' }}
+  vars:
+    lmod_version_raw: "{{ (lmod_version_check.stdout | default('')) | trim }}"
+    lmod_version_actual: "{{ (lmod_version_raw | regex_findall('([0-9]+\\.[0-9]+\\.[0-9]+)') | first) | default('Not Installed', true) }}"
+  when: lmod_enabled | default(false)

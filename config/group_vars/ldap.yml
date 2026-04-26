@@ -1,0 +1,43 @@
+---
+# LDAP configuration
+
+# Base settings
+ldap_enabled: true
+ldap_domain: "example.com"
+ldap_suffix: "dc=example,dc=com"
+ldap_uri: "ldap://{{ groups['ldap'][0] | default('localhost') }}"
+
+# Credentials
+ldap_root_pw: "{{ vault_ldap_root_pw | default('easyhpc') }}"
+ldap_root_pw_hash: "{{ vault_ldap_root_pw_hash | default('{SSHA}RdUThfvEStyQVba0DuN4Twegq3KKavF7') }}"
+# NOTE: SSSD expects a *plain* password here (not a hash).
+ldap_bind_pw: "{{ vault_ldap_bind_pw | default('easyhpc') }}"
+ldap_bind_pw_hash: "{{ vault_ldap_bind_pw_hash | default('{SSHA}LbIZ7pobmtVp0NJrjoMJmNnt8pISBb8n') }}"
+
+# TLS settings (inline PEM content or file sources)
+ldap_tls_enabled: true
+ldap_tls_reqcert: "demand"
+ldap_tls_cert_content: ""
+ldap_tls_key_content: ""
+ldap_tls_ca_cert_content: ""
+ldap_tls_cert_src: ""
+ldap_tls_key_src: ""
+ldap_tls_ca_cert_src: ""
+
+# User/group defaults
+ldap_default_shell: "/bin/bash"
+ldap_home_prefix: "{{ shared_storage_mount }}/users"
+ldap_pam_mkhomedir: true
+ldap_uid_start: 20000
+ldap_gid_start: 20000
+ldap_seed_groups:
+  - name: "ldapusers"
+    gidNumber: "{{ ldap_gid_start }}"
+ldap_seed_users: []
+
+# SSSD behavior
+# - ppolicy is required for "force password change on first login" flows (when pwdReset: TRUE is set).
+ldap_pwd_policy: "ppolicy"
+# - override_homedir forces a consistent homedir path regardless of LDAP homeDirectory attribute.
+ldap_override_homedir_enabled: false
+ldap_override_homedir: "{{ ldap_home_prefix }}/%u"

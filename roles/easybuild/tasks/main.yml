@@ -1,0 +1,259 @@
+---
+# EasyBuild Role - installs EasyBuild as a module (per EasyBuild docs step 3)
+
+- name: Install EasyBuild dependencies (RedHat)
+  ansible.builtin.package:
+    name:
+      - python3
+      - python3-pip
+      - python3-virtualenv
+      - python3-setuptools
+      - gcc
+      - gcc-c++
+      - make
+      - tar
+      - bzip2
+      - gzip
+      - unzip
+      - patch
+      - wget
+      - curl
+    state: present
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install EasyBuild dependencies (Debian)
+  ansible.builtin.package:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-setuptools
+      - gcc
+      - g++
+      - make
+      - tar
+      - bzip2
+      - gzip
+      - unzip
+      - patch
+      - wget
+      - curl
+    state: present
+  when: ansible_facts['os_family'] == "Debian"
+
+- name: Create shared EasyBuild directories on storage host
+  run_once: true
+  delegate_to: "{{ easybuild_storage_host }}"
+  when: easybuild_manage_shared_paths | bool
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: "{{ easybuild_directory_mode }}"
+  loop:
+    - "{{ easybuild_storage_path }}"
+    - "{{ easybuild_storage_path }}/easybuild"
+    - "{{ easybuild_storage_path }}/easybuild/config"
+    - "{{ easybuild_storage_path }}/easybuild/sources"
+    - "{{ easybuild_storage_path }}/easybuild/ebfiles_repo"
+    - "{{ easybuild_storage_path }}/easybuild/containers"
+
+- name: Create EasyBuild directories locally
+  when: not easybuild_manage_shared_paths | bool
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: "{{ easybuild_directory_mode }}"
+  loop:
+    - "{{ easybuild_install_path }}"
+    - "{{ easybuild_state_path }}"
+    - "{{ easybuild_config_path }}"
+    - "{{ easybuild_source_path }}"
+    - "{{ easybuild_repository_path }}"
+    - "{{ easybuild_build_path }}"
+    - "{{ easybuild_tmp_path }}"
+    - "{{ easybuild_containers_path }}"
+
+- name: Ensure shared EasyBuild ownership
+  run_once: true
+  delegate_to: "{{ easybuild_storage_host }}"
+  when: easybuild_manage_shared_paths | bool
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: "{{ easybuild_directory_mode }}"
+    recurse: true
+  loop:
+    - "{{ easybuild_storage_path }}"
+    - "{{ easybuild_storage_path }}/easybuild"
+    - "{{ easybuild_storage_path }}/easybuild/config"
+    - "{{ easybuild_storage_path }}/easybuild/sources"
+    - "{{ easybuild_storage_path }}/easybuild/ebfiles_repo"
+    - "{{ easybuild_storage_path }}/easybuild/containers"
+
+- name: Ensure EasyBuild directories exist on easybuild host
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: "{{ easybuild_directory_mode }}"
+  loop:
+    - "{{ easybuild_install_path }}"
+    - "{{ easybuild_state_path }}"
+    - "{{ easybuild_config_path }}"
+    - "{{ easybuild_source_path }}"
+    - "{{ easybuild_repository_path }}"
+    - "{{ easybuild_build_path }}"
+    - "{{ easybuild_tmp_path }}"
+    - "{{ easybuild_containers_path }}"
+  when: easybuild_manage_shared_paths | bool
+
+- name: Ensure easyconfigs parent directory exists
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.file:
+    path: "{{ easybuild_easyconfigs_path | dirname }}"
+    state: directory
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: "0755"
+
+- name: Ensure easyconfigs repository is present (local on easybuild host)
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.git:
+    repo: "{{ easybuild_easyconfigs_repo_url }}"
+    dest: "{{ easybuild_easyconfigs_path }}"
+    version: "{{ easybuild_easyconfigs_version }}"
+    force: true
+
+- name: Ensure EasyBuild bootstrap venv exists
+  ansible.builtin.command: "{{ easybuild_bootstrap_python }} -m venv {{ easybuild_bootstrap_venv }}"
+  args:
+    creates: "{{ easybuild_bootstrap_venv }}/bin/python"
+
+- name: Ensure bootstrap venv has setuptools and wheel
+  ansible.builtin.pip:
+    name:
+      - setuptools
+      - wheel
+    state: present
+    virtualenv: "{{ easybuild_bootstrap_venv }}"
+    virtualenv_command: "{{ easybuild_bootstrap_python }} -m venv"
+
+- name: Install temporary EasyBuild into bootstrap venv
+  ansible.builtin.pip:
+    name: "easybuild=={{ easybuild_version }}"
+    state: present
+    virtualenv: "{{ easybuild_bootstrap_venv }}"
+    virtualenv_command: "{{ easybuild_bootstrap_python }} -m venv"
+
+- name: Check for existing EasyBuild module
+  ansible.builtin.stat:
+    path: "{{ easybuild_modules_path }}/EasyBuild"
+  register: easybuild_module_stat
+
+- name: Set EasyBuild easyconfig path
+  ansible.builtin.set_fact:
+    easybuild_easyconfig_file: "{{ easybuild_easyconfigs_path }}/easybuild/easyconfigs/e/EasyBuild/EasyBuild-{{ easybuild_version }}.eb"
+
+- name: Ensure EasyBuild easyconfig exists
+  ansible.builtin.stat:
+    path: "{{ easybuild_easyconfig_file }}"
+  register: easybuild_easyconfig_stat
+
+- name: Abort if EasyBuild easyconfig is missing
+  ansible.builtin.fail:
+    msg: >-
+      EasyBuild easyconfig not found at {{ easybuild_easyconfig_file }}.
+      Ensure easyconfigs repo is available ({{ easybuild_easyconfigs_repo_url }} -> {{ easybuild_easyconfigs_path }}).
+  when: not easybuild_easyconfig_stat.stat.exists
+
+- name: Install EasyBuild as module (eb --install-latest-eb-release)
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.shell: |
+    set -e
+    source /etc/profile.d/z00_lmod.sh
+    source "{{ easybuild_bootstrap_venv }}/bin/activate"
+    eb "{{ easybuild_easyconfig_file }}" --prefix "{{ easybuild_install_path }}"
+  args:
+    executable: /bin/bash
+    creates: "{{ easybuild_modules_path }}/EasyBuild"
+  environment:
+    MODULEPATH: "{{ easybuild_modules_path }}:{{ ansible_facts.env.MODULEPATH | default('') }}"
+    EASYBUILD_ROBOT_PATHS: "{{ easybuild_robot_paths }}"
+  when:
+    - easybuild_force_reinstall | default(false) | bool or not easybuild_module_stat.stat.exists
+
+- name: Create EasyBuild configuration
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.copy:
+    content: |
+      [config]
+      installpath = {{ easybuild_install_path }}
+      installpath-modules = {{ easybuild_modules_root }}
+      installpath-software = {{ easybuild_install_path }}/software
+      modules-tool = Lmod
+      moduleclasses = compiler, toolchain, devel, lib, bio, vis, numlib, tool, data, mpi, perf, debugger, devel-python
+      sourcepath = {{ easybuild_source_path }}
+      repositorypath = {{ easybuild_repository_path }}
+      repository = FileRepository
+      robot-paths = {{ easybuild_robot_paths }}
+      containerpath = {{ easybuild_containers_path }}
+      buildpath = {{ easybuild_build_path }}
+      tmpdir = {{ easybuild_tmp_path }}
+      subdir-modules = HierarchicalMNS
+      subdir-software = Software
+      use-existing-modules = True
+      module-naming-scheme = HierarchicalMNS
+      module-syntax = Lua
+      filter-deps = True
+      filter-env-vars = LD_LIBRARY_PATH, LIBRARY_PATH, CPATH, C_INCLUDE_PATH, CPLUS_INCLUDE_PATH, PKG_CONFIG_PATH
+      robot = {{ easybuild_robot_paths }}
+    dest: "{{ easybuild_config_file }}"
+    owner: "{{ easybuild_directory_owner }}"
+    group: "{{ easybuild_directory_group }}"
+    mode: '0644'
+
+- name: Deploy EasyBuild profile snippet
+  ansible.builtin.template:
+    src: easybuild.sh.j2
+    dest: /etc/profile.d/easybuild.sh
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Check for EasyBuild modulefile
+  ansible.builtin.stat:
+    path: "{{ easybuild_modulefile }}"
+  register: easybuild_modulefile_stat
+
+- name: Ensure EasyBuild module exports EASYBUILD_CONFIGFILES
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.lineinfile:
+    path: "{{ easybuild_modulefile }}"
+    line: 'setenv("EASYBUILD_CONFIGFILES", "{{ easybuild_config_file }}")'
+    insertafter: 'setenv\("EBVERSIONEASYBUILD"'
+  when: easybuild_modulefile_stat.stat.exists
+
+- name: Verify EasyBuild module is usable
+  become_user: "{{ easybuild_directory_owner }}"
+  ansible.builtin.shell: |
+    source /etc/profile.d/z00_lmod.sh
+    module use {{ easybuild_modules_path }}
+    module load EasyBuild
+    eb --version
+  args:
+    executable: /bin/bash
+  register: easybuild_version
+  changed_when: false
+  failed_when: false
+
+- name: Display EasyBuild status
+  ansible.builtin.debug:
+    msg: "EasyBuild: {{ easybuild_version.stdout if easybuild_version.rc == 0 else 'Not Installed' }}"

@@ -1,0 +1,104 @@
+---
+# PMIx Role - Source build and install
+
+- name: Verify installed PMIx version
+  ansible.builtin.command: "{{ pmix_install_prefix }}/bin/pmix_info"
+  register: pmix_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Parse PMIx version from output
+  ansible.builtin.set_fact:
+    pmix_version_detected: >-
+      {{
+        (
+          (pmix_version_check.stdout | default(''))
+          ~ ' '
+          ~ (pmix_version_check.stderr | default(''))
+        )
+        | regex_findall('PMIX:\\s*([0-9]+\\.[0-9]+\\.[0-9]+)')
+        | first
+        | default('')
+      }}
+
+- name: Determine if PMIx build is required
+  ansible.builtin.set_fact:
+    pmix_needs_build: >-
+      {{ (pmix_force_rebuild | default(false) | bool)
+         or (pmix_version_check.rc != 0)
+         or (pmix_version_detected != pmix_version) }}
+
+- name: Install PMIx build dependencies
+  ansible.builtin.package:
+    name: "{{ pmix_build_dependencies[ansible_facts['os_family']] }}"
+    state: present
+  when: pmix_needs_build
+
+- name: Create PMIx build directory
+  ansible.builtin.file:
+    path: "{{ pmix_build_dir }}"
+    state: directory
+    mode: "0755"
+  when: pmix_needs_build
+
+- name: Remove existing PMIx source directory
+  ansible.builtin.file:
+    path: "{{ pmix_source_dir }}"
+    state: absent
+  when: pmix_needs_build
+
+- name: Download PMIx source archive
+  ansible.builtin.get_url:
+    url: "{{ pmix_source_url }}"
+    dest: "{{ pmix_build_dir }}/pmix-{{ pmix_version }}.tar.bz2"
+    mode: "0644"
+  when: pmix_needs_build
+
+- name: Extract PMIx source archive
+  ansible.builtin.unarchive:
+    src: "{{ pmix_build_dir }}/pmix-{{ pmix_version }}.tar.bz2"
+    dest: "{{ pmix_build_dir }}"
+    remote_src: true
+  when: pmix_needs_build
+
+- name: Configure PMIx build options
+  ansible.builtin.command: "{{ pmix_configure_options }}"
+  args:
+    chdir: "{{ pmix_source_dir }}"
+    creates: "{{ pmix_source_dir }}/Makefile"
+  when: pmix_needs_build
+
+- name: Build PMIx from source
+  ansible.builtin.make:
+    chdir: "{{ pmix_source_dir }}"
+    target: all
+    params:
+      MAKEFLAGS: "-j{{ pmix_make_jobs | default(ansible_facts[\"processor_vcpus\"] | default(4)) }}"
+  when: pmix_needs_build
+
+- name: Install PMIx binaries and libraries
+  ansible.builtin.make:
+    chdir: "{{ pmix_source_dir }}"
+    target: install
+  when: pmix_needs_build
+
+- name: Deploy PMIx ldconfig configuration
+  ansible.builtin.copy:
+    dest: /etc/ld.so.conf.d/pmix.conf
+    content: |
+      {{ pmix_install_prefix }}/lib
+      {{ pmix_install_prefix }}/lib64
+    mode: "0644"
+  register: pmix_ldconfig
+
+- name: Refresh ldconfig cache for PMIx libraries
+  ansible.builtin.command: ldconfig
+  when: pmix_ldconfig.changed
+
+- name: Clean up PMIx build directory
+  ansible.builtin.file:
+    path: "{{ pmix_build_dir }}"
+    state: absent
+  when:
+    - pmix_needs_build
+    - pmix_build_cleanup | default(true) | bool

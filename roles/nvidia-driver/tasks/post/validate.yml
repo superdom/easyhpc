@@ -1,0 +1,147 @@
+---
+# Post: validation and GPUDirect modules
+
+- name: Check nvidia-smi availability
+  ansible.builtin.command: which nvidia-smi
+  register: nvidia_smi_check_verify
+  changed_when: false
+  failed_when: false
+  when: nvidia_driver_validate_installation
+
+- name: Fail if nvidia-smi not found
+  ansible.builtin.fail:
+    msg: "nvidia-smi command not found. Driver installation may have failed."
+  when:
+    - nvidia_driver_validate_installation
+    - nvidia_smi_check_verify.rc != 0
+
+- name: Run nvidia-smi
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_smi_output
+  changed_when: false
+  retries: 3
+  delay: 5
+  until: nvidia_smi_output.rc == 0
+  when: nvidia_driver_validate_installation
+
+- name: Build GPUDirect module list
+  ansible.builtin.set_fact:
+    nvidia_driver_modules_to_load: >-
+      {{
+        (
+          (['nvidia_peermem'] if (nvidia_driver_peermem_enabled | default(false)) else [])
+          + (['gdr_copy'] if (nvidia_driver_gdrcopy_enabled | default(false)) else [])
+          + (nvidia_driver_extra_kernel_modules | default([]))
+        ) | unique
+      }}
+  when: nvidia_driver_validate_installation
+
+- name: Check GPUDirect module availability
+  ansible.builtin.command: "modinfo {{ item }}"
+  register: nvidia_driver_module_info
+  changed_when: false
+  failed_when: false
+  loop: "{{ nvidia_driver_modules_to_load | default([]) }}"
+  when:
+    - nvidia_driver_validate_installation
+    - (nvidia_driver_modules_to_load | default([]) | length) > 0
+
+- name: Warn if GPUDirect module is missing
+  ansible.builtin.debug:
+    msg: "WARNING: Kernel module {{ item.item }} not found. Ensure package/DKMS build is available for kernel {{ ansible_facts['kernel'] }}."
+  loop: "{{ nvidia_driver_module_info.results | default([]) }}"
+  when:
+    - nvidia_driver_validate_installation
+    - item.rc != 0
+
+- name: Set GPUDirect modules to load (available only)
+  ansible.builtin.set_fact:
+    nvidia_driver_modules_to_load_effective: "{{ (nvidia_driver_module_info.results | default([]) | selectattr('rc','equalto',0) | map(attribute='item') | list) }}"
+  when:
+    - nvidia_driver_validate_installation
+    - (nvidia_driver_modules_to_load | default([]) | length) > 0
+
+- name: Configure modules-load for GPUDirect
+  ansible.builtin.copy:
+    dest: "{{ nvidia_driver_modules_autoload_file }}"
+    content: |
+      # Managed by Ansible
+      {% for mod in nvidia_driver_modules_to_load_effective | default(nvidia_driver_modules_to_load) %}
+      {{ mod }}
+      {% endfor %}
+    mode: '0644'
+  when:
+    - nvidia_driver_validate_installation
+    - nvidia_driver_modules_autoload | default(true)
+    - (nvidia_driver_modules_to_load_effective | default(nvidia_driver_modules_to_load) | length) > 0
+
+- name: Load GPUDirect kernel modules
+  ansible.builtin.command: "modprobe {{ item }}"
+  register: nvidia_driver_modprobe
+  changed_when: nvidia_driver_modprobe.rc == 0
+  failed_when: false
+  loop: "{{ nvidia_driver_modules_to_load_effective | default(nvidia_driver_modules_to_load) }}"
+  when:
+    - nvidia_driver_validate_installation
+    - (nvidia_driver_modules_to_load_effective | default(nvidia_driver_modules_to_load) | length) > 0
+
+- name: Warn if GPUDirect modules failed to load
+  ansible.builtin.debug:
+    msg: "WARNING: Failed to load module {{ item.item }} (rc={{ item.rc }})."
+  when:
+    - nvidia_driver_validate_installation
+    - nvidia_driver_modprobe is defined
+    - item.rc != 0
+  loop: "{{ nvidia_driver_modprobe.results | default([]) }}"
+
+- name: Display nvidia-smi output
+  ansible.builtin.debug:
+    msg: "{{ nvidia_smi_output.stdout_lines }}"
+  when: nvidia_driver_validate_installation
+
+- name: Get driver version
+  ansible.builtin.shell: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+  register: installed_driver_version
+  changed_when: false
+  when: nvidia_driver_validate_installation
+
+- name: Get GPU information
+  ansible.builtin.shell: nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
+  register: gpu_info
+  changed_when: false
+  when: nvidia_driver_validate_installation
+
+- name: Display installation summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "NVIDIA Driver Installation Complete"
+      - "=========================================="
+      - "Driver Version: {{ installed_driver_version.stdout }}"
+      - "GPU Information:"
+      - "{{ gpu_info.stdout_lines }}"
+      - "=========================================="
+  when: nvidia_driver_validate_installation
+
+- name: Check NVIDIA kernel module
+  ansible.builtin.shell: lsmod | grep -w nvidia
+  register: nvidia_module_check
+  changed_when: false
+  when: nvidia_driver_validate_installation
+
+- name: Display loaded NVIDIA modules
+  ansible.builtin.debug:
+    msg: "{{ nvidia_module_check.stdout_lines }}"
+  when: nvidia_driver_validate_installation
+
+- name: Verify persistence daemon (if enabled)
+  ansible.builtin.systemd:
+    name: nvidia-persistenced
+    state: started
+  when: nvidia_driver_validate_installation and nvidia_driver_persistence_mode
+  register: persistenced_status
+  failed_when: false
+
+- name: Display persistence daemon status
+  ansible.builtin.debug:
+    msg: "nvidia-persistenced is {{ 'running' if persistenced_status is succeeded else 'not running (this is OK if not using compute workloads)' }}"

@@ -1,0 +1,23 @@
+---
+# Prometheus SLURM Exporter defaults
+
+# Upstream release version (without the leading v)
+slurm_exporter_version: "1.8.0"
+
+# Systemd service name provided by the package
+slurm_exporter_service_name: prometheus-slurm-exporter
+
+# Behavior when Slurm prerequisites are missing.
+# Valid values: "skip", "fail"
+slurm_exporter_prereq_policy: "skip"
+
+# Slurm prerequisites for exporter installation.
+slurm_exporter_required_slurmctld_service: "slurmctld.service"
+
+# Listen address/port for the exporter
+slurm_exporter_listen_address: "0.0.0.0:{{ slurm_exporter_port | default(8080) }}"
+
+# Extra CLI arguments to pass to the exporter
+slurm_exporter_extra_args:
+  - "--web.listen-address={{ slurm_exporter_listen_address }}"
+  - "--slurm.cli-fallback"

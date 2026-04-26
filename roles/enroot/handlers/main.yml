@@ -1,0 +1,5 @@
+---
+- name: reboot for enroot kernel options
+  ansible.builtin.reboot:
+    msg: "Rebooting to apply Enroot kernel parameters"
+    reboot_timeout: "{{ reboot_timeout | default(600) }}"

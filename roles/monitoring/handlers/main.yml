@@ -1,0 +1,28 @@
+---
+# Handlers for Monitoring (Docker)
+
+- name: restart prometheus
+  community.docker.docker_compose_v2:
+    project_src: /opt/monitoring
+    services:
+      - prometheus
+    state: restarted
+  ignore_errors: true
+  register: restart_result
+
+- name: restart prometheus (fallback)
+  ansible.builtin.command: docker compose -f /opt/monitoring/docker-compose.yml restart prometheus
+  when: restart_result is failed
+
+- name: restart grafana
+  community.docker.docker_compose_v2:
+    project_src: /opt/monitoring
+    services:
+      - grafana
+    state: restarted
+  ignore_errors: true
+  register: restart_result_grafana
+
+- name: restart grafana (fallback)
+  ansible.builtin.command: docker compose -f /opt/monitoring/docker-compose.yml restart grafana
+  when: restart_result_grafana is failed

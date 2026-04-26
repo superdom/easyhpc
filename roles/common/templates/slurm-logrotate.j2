@@ -1,0 +1,15 @@
+/var/log/slurm/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 {{ slurm_user.name | default('slurm') }} {{ slurm_user.group | default('slurm') }}
+    sharedscripts
+    postrotate
+        /usr/bin/systemctl reload slurmd >/dev/null 2>&1 || true
+        /usr/bin/systemctl reload slurmctld >/dev/null 2>&1 || true
+    endscript
+}
+

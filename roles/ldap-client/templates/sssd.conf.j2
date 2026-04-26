@@ -1,0 +1,27 @@
+[sssd]
+config_file_version = 2
+services = nss, pam
+domains = LDAP
+
+[domain/LDAP]
+id_provider = ldap
+auth_provider = ldap
+chpass_provider = ldap
+ldap_uri = {{ ldap_uri }}
+ldap_search_base = {{ ldap_suffix }}
+ldap_default_bind_dn = {{ ldap_bind_dn }}
+ldap_default_authtok = {{ ldap_bind_pw }}
+{% if (ldap_pwd_policy | default('')) | length > 0 %}
+ldap_pwd_policy = {{ ldap_pwd_policy }}
+{% endif %}
+ldap_id_use_start_tls = {{ (ldap_tls_enabled | default(false)) | ternary('True', 'False') }}
+ldap_tls_reqcert = {{ ldap_tls_reqcert }}
+ldap_tls_cacert = {{ ldap_tls_ca_path_effective }}
+cache_credentials = True
+enumerate = False
+{% if ldap_override_homedir_enabled | default(false) %}
+override_homedir = {{ ldap_override_homedir | default('/home/%u') }}
+{% endif %}
+fallback_homedir = {{ ldap_home_prefix }}/%u
+default_shell = {{ ldap_default_shell }}
+ldap_referrals = false

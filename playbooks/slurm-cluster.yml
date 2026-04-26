@@ -1,0 +1,183 @@
+---
+# SLURM Cluster Deployment Playbook
+
+- name: Deploy SLURM Cluster
+  hosts: all
+  become: true
+  become_user: root
+  gather_facts: yes
+
+  vars_files:
+    # Global defaults live in config/group_vars/all.yml (auto-loaded by Ansible)
+    # Dependency-aware load order (later files can override earlier ones):
+    # 1) slurm.yml: Slurm settings depend on storage/module paths
+    # 2) ldap.yml: home paths may use shared storage
+    # 3) services.yml: runtime + monitoring/logging settings
+    - ../config/group_vars/slurm.yml
+    - ../config/group_vars/ldap.yml
+    - ../config/group_vars/services.yml
+
+  roles:
+    # Phase 1: Common system setup
+    - role: common
+      tags: common
+
+    # Phase 2: GPU and container support
+    - role: nvidia-driver
+      when: nvidia_driver_enabled | bool
+      tags: nvidia-driver
+
+    - role: docker
+      when: docker_enabled | bool
+      tags: docker
+
+    - role: nvidia-container-toolkit
+      when:
+        - docker_enabled | bool
+        - nvidia_container_toolkit_enabled | bool
+      tags: nvidia-container-toolkit
+
+    - role: enroot
+      when:
+        - enroot_enabled | bool
+        - is_slurm_compute_or_login | default(false)
+      tags: enroot
+
+    # Phase 3: Storage and shared resources
+    - role: nfs-server
+      when: 
+        - nfs_enable_server | default(false) | bool
+        - is_nfs_server | default(false)
+      tags: nfs-server
+    
+    - role: nfs-client
+      when:
+        - nfs_enable_client | default(false) | bool
+        - is_nfs_client | default(false)
+      tags: nfs-client
+
+    # Phase 4.1: Slurm stack - HA prerequisite validation (slurmctld)
+    - role: ha-slurm
+      when:
+        - slurm_ha_enabled | default(false)
+        - is_slurm_controller | default(false)
+      tags: ha-slurm
+
+    # Phase 4.2: Slurm stack - MySQL Database for Slurm Accounting
+    - role: slurm-mysql
+      when:
+        - "'slurm-controller' in group_names"
+        - inventory_hostname == (groups['slurm-controller'][0] | default(''))
+        - slurm_accounting_enabled | default(false)
+      tags: slurm-mysql
+
+    # Phase 4.3: Slurm stack - HWLOC and PMIx (source builds)
+    - role: hwloc
+      when: is_slurm_node | default(false)
+      tags: hwloc
+
+    - role: pmix
+      when: is_slurm_node | default(false)
+      tags: pmix
+
+    # Phase 4.4: Slurm stack - SLURM (unified role)
+    - role: slurm
+      when: is_slurm_node | default(false)
+      tags: slurm
+
+    # Phase 5: Slurm add-ons - Pyxis (SLURM plugin - requires SLURM to be installed first)
+    - role: pyxis
+      when:
+        - pyxis_enabled | bool
+        - enroot_enabled | bool
+        - is_slurm_compute_or_login | default(false)
+      tags: pyxis
+
+    # Phase 5: Slurm add-ons - SLURM-dependent tools
+    - role: lmod
+      when:
+        - lmod_enabled | bool
+        - is_slurm_node | default(false)
+      tags: lmod
+
+    - role: nhc
+      when:
+        - nhc_enabled | bool
+        - is_slurm_compute | default(false)
+      tags: nhc
+    
+    # Phase 6: Software build tooling (EasyBuild)
+    - role: easybuild
+      when:
+        - easybuild_enabled | bool
+        - is_easybuild_host | default(false)
+      tags: easybuild
+
+    # Phase 7: logging & monitoring
+    # Loki: Only on logging nodes
+    - role: loki
+      when:
+        - loki_enabled | bool
+        - is_logging_node | default(false)
+      tags: loki
+
+    # Alloy: All nodes
+    - role: alloy
+      when:
+        - alloy_enabled | bool
+      tags: alloy
+
+    # Node Exporter: Compute nodes and login nodes
+    - role: prometheus-node-exporter
+      when:
+        - node_exporter_enabled | default(true)
+      tags: prometheus-node-exporter
+
+    # SLURM Exporter: Only on controller node
+    - role: prometheus-slurm-exporter
+      when:
+        - monitoring_enabled | bool
+        - is_slurm_controller | default(false)
+      tags: prometheus-slurm-exporter
+
+    # DCGM Exporter: Only on compute nodes (slurm-node) that have GPUs
+    - role: nvidia-dcgm-exporter
+      when:
+        - monitoring_enabled | bool
+        - is_slurm_compute | default(false)
+      tags: nvidia-dcgm-exporter
+
+    # Alertmanager: Only on monitoring nodes
+    - role: alertmanager
+      when:
+        - monitoring_enabled | bool
+        - is_monitoring_node | default(false)
+      tags: alertmanager
+
+    # Prometheus and Grafana: Only on monitoring nodes
+    - role: monitoring
+      when:
+        - monitoring_enabled | bool
+        - is_monitoring_node | default(false)
+      tags: monitoring
+
+    # Phase 8: LDAP server/client
+    # Review the guide in docs/05-ldap.md before applying
+   # - role: ldap-server
+   #   when:
+   #     - ldap_enabled | default(false)
+   #     - "'ldap' in group_names"
+   #   tags: ldap-server
+
+   # - role: ldap-client
+   #   when:
+   #     - ldap_enabled | default(false)
+   #   tags: ldap-client
+
+  post_tasks:
+    - name: Reboot nodes if required
+      ansible.builtin.reboot:
+        msg: "{{ reboot_message | default('Reboot required') }}"
+        reboot_timeout: "{{ reboot_timeout | default(600) }}"
+      when: reboot_required | default(false) | bool
+      tags: always

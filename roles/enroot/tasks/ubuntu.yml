@@ -1,0 +1,80 @@
+---
+# Ubuntu/Debian specific tasks for Enroot installation
+
+- name: Install prerequisites for Enroot
+  ansible.builtin.apt:
+    update_cache: yes
+    name:
+      - curl
+      - tar
+      - gzip
+      - bash-completion
+      - pigz
+
+- name: Gather package facts for comparison
+  ansible.builtin.package_facts:
+    manager: apt
+  when: enroot_force_reinstall | default(false) | bool
+
+- name: Remove existing enroot package if force reinstall
+  ansible.builtin.apt:
+    name:
+      - enroot
+      - "enroot+caps"
+    state: absent
+  when:
+    - enroot_force_reinstall | default(false) | bool
+    - enroot_version_check.rc == 0
+
+- name: Download Enroot packages
+  ansible.builtin.get_url:
+    url: "https://github.com/NVIDIA/enroot/releases/download/{{ enroot_version_tag }}/enroot_{{ enroot_version_clean }}-1_amd64.deb"
+    dest: "/tmp/enroot_{{ enroot_version_clean }}-1_amd64.deb"
+    mode: '0644'
+  register: enroot_deb_download
+  until: enroot_deb_download is succeeded
+  retries: 3
+  delay: 5
+
+- name: Download Enroot+caps package
+  ansible.builtin.get_url:
+    url: "https://github.com/NVIDIA/enroot/releases/download/{{ enroot_version_tag }}/enroot+caps_{{ enroot_version_clean }}-1_amd64.deb"
+    dest: "/tmp/enroot+caps_{{ enroot_version_clean }}-1_amd64.deb"
+    mode: '0644'
+  register: enroot_caps_deb_download
+  until: enroot_caps_deb_download is succeeded
+  retries: 3
+  delay: 5
+  ignore_errors: yes
+
+- name: Install Enroot package
+  ansible.builtin.apt:
+    deb: "/tmp/enroot_{{ enroot_version_clean }}-1_amd64.deb"
+    state: present
+    update_cache: no
+  register: enroot_installed
+
+- name: Fix Enroot package dependencies if needed
+  ansible.builtin.apt:
+    name: enroot
+    state: present
+    update_cache: yes
+  when: enroot_installed is failed
+
+- name: Install Enroot+caps package
+  ansible.builtin.apt:
+    deb: "/tmp/enroot+caps_{{ enroot_version_clean }}-1_amd64.deb"
+    state: present
+    update_cache: no
+  when: enroot_caps_deb_download is succeeded
+  ignore_errors: yes
+
+- name: Clean up downloaded packages
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "/tmp/enroot_{{ enroot_version_clean }}-1_amd64.deb"
+    - "/tmp/enroot+caps_{{ enroot_version_clean }}-1_amd64.deb"
+  ignore_errors: yes
+

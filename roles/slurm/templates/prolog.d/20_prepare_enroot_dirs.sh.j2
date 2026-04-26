@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command -v enroot >/dev/null 2>&1 || exit 0
+
+job_user="${SLURM_JOB_USER:-}"
+if [[ -z "${job_user}" ]]; then
+  exit 0
+fi
+
+job_uid="${SLURM_JOB_UID:-}"
+if [[ -z "${job_uid}" ]]; then
+  if ! job_uid="$(id -u "${job_user}" 2>/dev/null)"; then
+    exit 0
+  fi
+fi
+
+job_gid="${SLURM_JOB_GID:-}"
+if [[ -z "${job_gid}" ]]; then
+  if ! job_gid="$(id -g "${job_user}" 2>/dev/null)"; then
+    exit 0
+  fi
+fi
+
+{% set use_pyxis = pyxis_enabled | default(false) | bool %}
+{% if use_pyxis %}
+runtime_base="{{ pyxis_enroot_runtime_base | default('/run/enroot') }}"
+cache_base="{{ pyxis_enroot_cache_base | default('/var/lib/enroot-cache') }}"
+data_base="{{ pyxis_enroot_data_base | default('/tmp/enroot-data') }}"
+{% else %}
+runtime_base="/run/enroot"
+cache_base="{{ enroot_cache_dir | default('/tmp/enroot-cache') }}"
+data_base="{{ enroot_data_dir | default('/tmp/enroot') }}"
+{% endif %}
+
+if [[ -n "${runtime_base}" && ! -d "${runtime_base}" ]]; then
+  mkdir -p "${runtime_base}"
+fi
+if [[ -n "${cache_base}" && ! -d "${cache_base}" ]]; then
+  mkdir -p "${cache_base}"
+fi
+if [[ -n "${data_base}" && ! -d "${data_base}" ]]; then
+  mkdir -p "${data_base}"
+fi
+
+runtime_path="${runtime_base}/user-${job_uid}"
+cache_path="${cache_base}/user-${job_uid}"
+data_path="${data_base}/user-${job_uid}"
+
+install -d -m 0700 -o "${job_uid}" -g "${job_gid}" \
+  "${runtime_path}" "${cache_path}" "${data_path}"
+
+exit 0

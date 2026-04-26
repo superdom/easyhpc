@@ -1,0 +1,8 @@
+# SLURM System Limits
+{{ slurm_user.name | default('slurm') }}          soft    nofile          10240
+{{ slurm_user.name | default('slurm') }}          hard    nofile          20480
+{{ slurm_user.name | default('slurm') }}          soft    nproc           4096
+{{ slurm_user.name | default('slurm') }}          hard    nproc           8192
+{{ slurm_user.name | default('slurm') }}          soft    memlock         unlimited
+{{ slurm_user.name | default('slurm') }}          hard    memlock         unlimited
+

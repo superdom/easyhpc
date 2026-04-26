@@ -1,0 +1,92 @@
+---
+# Alertmanager Role (Docker container)
+# Only runs on nodes in the 'monitoring' group
+
+- name: Verify this is a monitoring node
+  ansible.builtin.fail:
+    msg: "This role should only run on nodes in the 'monitoring' group"
+  when: not (is_monitoring_node | default(false))
+
+- name: Ensure Alertmanager configuration directory exists
+  ansible.builtin.file:
+    path: "{{ alertmanager_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure Alertmanager Docker volume exists
+  community.docker.docker_volume:
+    name: "{{ alertmanager_volume_name }}"
+    state: present
+
+- name: Create Alertmanager configuration
+  ansible.builtin.copy:
+    content: |
+      global:
+        resolve_timeout: 5m
+
+      route:
+        group_by: ['alertname']
+        group_wait: 10s
+        group_interval: 10s
+        repeat_interval: 12h
+        receiver: 'default'
+        routes:
+        - match:
+            severity: critical
+          receiver: 'default'
+
+      receivers:
+      - name: 'default'
+        webhook_configs:
+        - url: 'http://localhost:5001/'
+    dest: "{{ alertmanager_config_dir }}/alertmanager.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart alertmanager
+
+- name: Install Alertmanager systemd service (Docker)
+  ansible.builtin.copy:
+    content: |
+      [Unit]
+      Description=Prometheus Alertmanager (Docker)
+      Requires=docker.service
+      After=docker.service
+
+      [Service]
+      TimeoutStartSec=0
+      Restart=always
+      ExecStartPre=-/usr/bin/docker stop {{ alertmanager_container_name }}
+      ExecStartPre=-/usr/bin/docker rm {{ alertmanager_container_name }}
+      ExecStartPre=/usr/bin/docker pull {{ alertmanager_image }}
+      ExecStart=/usr/bin/docker run --rm --name {{ alertmanager_container_name }} --network {{ alertmanager_docker_network_mode }} -v {{ alertmanager_config_dir }}:/etc/alertmanager:ro -v {{ alertmanager_volume_name }}:/alertmanager {{ alertmanager_image }} --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager/data --web.listen-address=0.0.0.0:{{ alertmanager_port }}
+      ExecStop=/usr/bin/docker stop {{ alertmanager_container_name }}
+
+      [Install]
+      WantedBy=multi-user.target
+    dest: "/etc/systemd/system/{{ alertmanager_service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart alertmanager
+
+- name: Start and enable Alertmanager service
+  ansible.builtin.systemd:
+    name: "{{ alertmanager_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Verify Alertmanager is running
+  ansible.builtin.uri:
+    url: "http://localhost:{{ alertmanager_port }}/-/healthy"
+    status_code: 200
+  register: alertmanager_check
+  changed_when: false
+  failed_when: false
+
+- name: Display Alertmanager status
+  ansible.builtin.debug:
+    msg: "Alertmanager: {{ 'Running' if alertmanager_check.status == 200 else 'Not Running' }}"

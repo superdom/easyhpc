@@ -1,0 +1,43 @@
+---
+# HWLOC Role Defaults
+
+hwloc_version: "2.9.3"
+hwloc_install_prefix: "/opt/hpc/stack/hwloc"
+
+# Parallel build configuration
+# Number of parallel make jobs (defaults to CPU count)
+hwloc_make_jobs: "{{ ansible_facts['processor_vcpus'] | default(4) }}"
+
+hwloc_build_dependencies:
+  RedHat:
+    - "gcc"
+    - "gcc-c++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkgconfig"
+    - "wget"
+    - "tar"
+    - "gzip"
+    - "bzip2"
+    - "xz"
+  Debian:
+    - "gcc"
+    - "g++"
+    - "make"
+    - "autoconf"
+    - "automake"
+    - "libtool"
+    - "pkg-config"
+    - "wget"
+    - "tar"
+    - "gzip"
+    - "bzip2"
+    - "xz-utils"
+hwloc_build_dir: "/tmp/hwloc-build"
+hwloc_source_url: "https://download.open-mpi.org/release/hwloc/v{{ hwloc_version.split('.')[0] }}.{{ hwloc_version.split('.')[1] }}/hwloc-{{ hwloc_version }}.tar.gz"
+hwloc_source_dir: "{{ hwloc_build_dir }}/hwloc-{{ hwloc_version }}"
+hwloc_configure_options: "./configure --prefix={{ hwloc_install_prefix }} --disable-cairo --disable-libxml2 --enable-netloc --enable-plugins"
+hwloc_force_rebuild: false
+hwloc_build_cleanup: true

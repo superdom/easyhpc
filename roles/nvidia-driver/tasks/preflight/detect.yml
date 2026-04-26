@@ -1,0 +1,232 @@
+---
+# Preflight: GPU detection and host preparation
+
+- name: Detect NVIDIA GPU via sysfs
+  ansible.builtin.shell: |
+    for dev in /sys/bus/pci/devices/*; do
+      [ -f "$dev/vendor" ] || continue
+      if grep -q 0x10de "$dev/vendor"; then
+        if [ -f "$dev/class" ] && grep -q '^0x03' "$dev/class"; then
+          exit 0
+        fi
+      fi
+    done
+    exit 1
+  register: nvidia_gpu_sysfs
+  changed_when: false
+  failed_when: false
+
+- name: Set GPU detection fact
+  ansible.builtin.set_fact:
+    nvidia_gpu_detected: "{{ nvidia_gpu_sysfs.rc == 0 }}"
+
+- name: Fail if GPU is required but not detected
+  ansible.builtin.fail:
+    msg: "No NVIDIA GPU detected, but nvidia_driver_require_gpu is true and skip_if_no_gpu is false."
+  when:
+    - not nvidia_gpu_detected
+    - nvidia_driver_require_gpu | default(false)
+    - not nvidia_driver_skip_if_no_gpu
+
+- name: Skip NVIDIA driver role when no GPU is present
+  ansible.builtin.debug:
+    msg: "Skipping NVIDIA driver installation: no NVIDIA GPU detected."
+  when:
+    - not nvidia_gpu_detected
+    - nvidia_driver_skip_if_no_gpu
+
+- name: End NVIDIA driver role when no GPU is present
+  ansible.builtin.meta: end_role
+  when:
+    - not nvidia_gpu_detected
+    - nvidia_driver_skip_if_no_gpu
+
+- name: Install required packages (Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - dkms
+      - linux-headers-{{ ansible_facts['kernel'] }}
+      - gnupg
+      - ca-certificates
+      - curl
+      - wget
+      - pciutils
+    state: present
+    update_cache: true
+  when:
+    - nvidia_gpu_detected
+    - ansible_facts['distribution'] == 'Ubuntu'
+  retries: 3
+  delay: 10
+  register: ubuntu_deps
+  until: ubuntu_deps is succeeded
+
+- name: Install required packages with running kernel headers (RHEL/Rocky)
+  block:
+    - name: Install required packages (RHEL/Rocky)
+      ansible.builtin.dnf:
+        name:
+          - gcc
+          - make
+          - dkms
+          - "kernel-devel-{{ ansible_facts['kernel'] }}"
+          - "kernel-headers-{{ ansible_facts['kernel'] }}"
+          - ca-certificates
+          - curl
+          - wget
+          - pciutils
+        state: present
+        update_cache: true
+      retries: 3
+      delay: 10
+      register: rhel_deps
+      until: rhel_deps is succeeded
+  rescue:
+    - name: Fallback to generic kernel headers (RHEL/Rocky)
+      ansible.builtin.dnf:
+        name:
+          - gcc
+          - make
+          - dkms
+          - kernel-devel
+          - kernel-headers
+          - ca-certificates
+          - curl
+          - wget
+          - pciutils
+        state: present
+        update_cache: true
+      retries: 3
+      delay: 10
+      register: rhel_deps
+      until: rhel_deps is succeeded
+  when:
+    - nvidia_gpu_detected
+    - ansible_facts['os_family'] == 'RedHat'
+
+- name: Collect GPU info via lspci (if available)
+  ansible.builtin.shell: |
+    if command -v lspci >/dev/null 2>&1; then
+      lspci -nn | grep -i nvidia
+    fi
+  register: nvidia_gpu_lspci
+  changed_when: false
+  failed_when: false
+  when: nvidia_gpu_detected
+
+- name: Set GPU model and match string
+  ansible.builtin.set_fact:
+    nvidia_gpu_model_string: "{{ (nvidia_gpu_lspci.stdout_lines | default([]) | join(' ')) | default('unknown', true) }}"
+    nvidia_gpu_match_string: "{{ nvidia_gpu_lspci.stdout | default('') | lower }}"
+    nvidia_nvswitch_present: "{{ (nvidia_gpu_lspci.stdout | default('') | lower) is search('nvswitch') }}"
+  when: nvidia_gpu_detected
+
+- name: Set GPU class and NVSwitch requirement
+  ansible.builtin.set_fact:
+    nvidia_gpu_class: >-
+      {{
+        (nvidia_gpu_class_override | length > 0)
+        | ternary(
+            nvidia_gpu_class_override | lower,
+            (
+              'b200' if ('b200' in nvidia_gpu_match_string) else
+              'h100' if ('h100' in nvidia_gpu_match_string) else
+              'a100' if ('a100' in nvidia_gpu_match_string) else
+              'rtx' if (('rtx' in nvidia_gpu_match_string) or ('geforce' in nvidia_gpu_match_string)) else
+              'unknown'
+            )
+          )
+      }}
+    nvidia_nvswitch_required: "{{ nvidia_nvswitch_enabled and (nvidia_nvswitch_present | default(false)) }}"
+  when: nvidia_gpu_detected
+
+- name: Derive NVSwitch generation (best-effort)
+  ansible.builtin.set_fact:
+    nvidia_nvswitch_generation_effective: >-
+      {% if nvidia_nvswitch_required %}
+      {% if nvidia_gpu_class in ['h100', 'b200'] %} 4
+      {% elif nvidia_gpu_class == 'a100' %} 3
+      {% else %} {{ nvidia_nvswitch_generation }}
+      {% endif %}
+      {% else %}
+      {{ nvidia_nvswitch_generation }}
+      {% endif %}
+  when: nvidia_gpu_detected
+
+- name: Display detected GPU information
+  ansible.builtin.debug:
+    msg:
+      - "GPU model: {{ nvidia_gpu_model_string | default('unknown') }}"
+      - "GPU class: {{ nvidia_gpu_class | default('unknown') }}"
+      - "NVSwitch present: {{ nvidia_nvswitch_present | default(false) }}"
+      - "NVSwitch required: {{ nvidia_nvswitch_required | default(false) }}"
+      - "NVSwitch generation: {{ nvidia_nvswitch_generation_effective | default(nvidia_nvswitch_generation) }}"
+  when: nvidia_gpu_detected
+
+- name: Check if NVIDIA driver is already installed
+  ansible.builtin.shell: |
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      nvidia-smi --query-gpu=driver_version --format=csv,noheader
+    else
+      echo "not_installed"
+    fi
+  register: nvidia_current_driver
+  changed_when: false
+  failed_when: false
+  when: nvidia_gpu_detected
+
+- name: Set current driver version fact
+  ansible.builtin.set_fact:
+    nvidia_driver_installed: "{{ nvidia_current_driver.stdout != 'not_installed' and nvidia_current_driver.rc == 0 }}"
+    nvidia_driver_current_version: >-
+      {{
+        (
+          (
+            nvidia_current_driver.stdout_lines
+            | default([])
+            | select('match','^[0-9]+(\\.[0-9]+)+$')
+            | unique
+            | list
+            | default(['none'], true)
+          )
+          | first
+        )
+        if (nvidia_current_driver.rc == 0 and nvidia_current_driver.stdout != 'not_installed')
+        else 'none'
+      }}
+  when: nvidia_gpu_detected
+
+- name: Check if installed driver matches requested version
+  ansible.builtin.set_fact:
+    nvidia_driver_version_matches_requested: >-
+      {{
+        nvidia_driver_installed
+        and nvidia_driver_strategy == 'specific'
+        and (nvidia_driver_version | default('') | length) > 0
+        and (nvidia_driver_current_version is search('^' ~ (nvidia_driver_version | string)))
+      }}
+  when: nvidia_gpu_detected
+
+- name: Determine downgrade and clean-install effective
+  ansible.builtin.set_fact:
+    nvidia_driver_downgrade_requested: >-
+      {{
+        nvidia_driver_installed
+        and nvidia_driver_strategy == 'specific'
+        and (nvidia_driver_version | default('') | length) > 0
+        and (nvidia_driver_current_version | default('') | length) > 0
+        and (nvidia_driver_current_version is match('^[0-9]+(\\.[0-9]+)+$'))
+        and ((nvidia_driver_current_version | string) is version(nvidia_driver_version | string, '>'))
+      }}
+  when: nvidia_gpu_detected
+
+- name: Set clean-install effective
+  ansible.builtin.set_fact:
+    nvidia_driver_clean_install_effective: "{{ (nvidia_driver_clean_install | default(false)) or (nvidia_driver_downgrade_requested | default(false)) }}"
+  when: nvidia_gpu_detected
+
+- name: Determine whether to skip driver install
+  ansible.builtin.set_fact:
+    nvidia_driver_skip_install: "{{ (nvidia_driver_version_matches_requested | default(false)) and not (nvidia_driver_clean_install_effective | default(false)) }}"
+  when: nvidia_gpu_detected

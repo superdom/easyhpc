@@ -1,0 +1,49 @@
+---
+# Install NVIDIA driver on RHEL/Rocky
+
+- name: Derive effective driver branch
+  ansible.builtin.set_fact:
+    nvidia_driver_branch_effective: "{{ nvidia_driver_branch if nvidia_driver_strategy in ['branch', 'latest'] else (nvidia_driver_version.split('.')[0] if nvidia_driver_version | length > 0 else nvidia_driver_branch) }}"
+
+- name: Set module stream (default)
+  ansible.builtin.set_fact:
+    nvidia_driver_rhel_module_stream_effective: >-
+      {{
+        nvidia_driver_rhel_module_stream
+        if nvidia_driver_rhel_module_stream | length > 0
+        else
+        (nvidia_driver_branch_effective ~ '-open' if nvidia_driver_use_open_kernel_modules else nvidia_driver_branch_effective)
+      }}
+
+- name: Reset NVIDIA driver module
+  ansible.builtin.command: dnf module reset -y nvidia-driver
+  changed_when: false
+  failed_when: false
+  when: nvidia_driver_rhel_module_reset
+
+- name: Enable NVIDIA driver module stream
+  ansible.builtin.command: "dnf module enable -y nvidia-driver:{{ nvidia_driver_rhel_module_stream_effective }}"
+  changed_when: false
+  failed_when: false
+
+- name: Build package list for RHEL/Rocky
+  ansible.builtin.set_fact:
+    nvidia_driver_rhel_packages: >-
+      {{
+        (['nvidia-driver'] +
+         (['nvidia-fabricmanager-' ~ nvidia_driver_branch_effective] if nvidia_fabric_manager_enabled else []) +
+         (['nvlink-' ~ nvidia_driver_branch_effective] if (nvidia_nvswitch_enabled and nvidia_nvswitch_generation | int >= 4) else []) +
+         (['nv-persistence-mode', 'nvidia-fm-enable'] if (nvidia_nvswitch_enabled and nvidia_fabric_manager_enabled) else [])
+        ) + nvidia_driver_rhel_packages_extra
+      }}
+
+- name: Install NVIDIA driver packages (RHEL/Rocky)
+  ansible.builtin.dnf:
+    name: "{{ nvidia_driver_rhel_packages }}"
+    state: "{{ nvidia_driver_package_state }}"
+  register: nvidia_driver_install
+
+- name: Set reboot flag if driver packages were installed
+  ansible.builtin.set_fact:
+    nvidia_reboot_required: true
+  when: nvidia_driver_install.changed

@@ -1,0 +1,32 @@
+[Unit]
+Description=SLURM node daemon
+Documentation=man:slurmd(8)
+After=network.target munge.service
+ConditionPathExists=/etc/slurm/slurm.conf
+Wants=munge.service
+
+[Service]
+Type=forking
+{% set configured_ctld = slurm_config.SlurmctldHost | default('') %}
+{% set discovered_hosts = slurmctld_hosts | default(groups['slurm-controller'] | default([])) %}
+{% set ctld_hosts = (discovered_hosts if (discovered_hosts | length > 0) else ([configured_ctld] if configured_ctld else [])) %}
+{% set ctld_port = slurm_config.SlurmctldPort | default(slurm_controller_port) %}
+{% if slurm_configless_enabled | default(false) | bool and ctld_hosts | length > 0 %}
+{% set conf_servers = [] %}
+{% for host in ctld_hosts %}
+{% set _ = conf_servers.append(host ~ ':' ~ ctld_port) %}
+{% endfor %}
+{% set conf_server_arg = ' --conf-server=' ~ (conf_servers | join(',')) %}
+{% else %}
+{% set conf_server_arg = '' %}
+{% endif %}
+ExecStart={{ slurm_install_prefix }}/sbin/slurmd{{ conf_server_arg }}
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=on-failure
+RestartSec=5s
+Delegate=yes
+Slice=system.slice
+
+[Install]
+WantedBy=multi-user.target

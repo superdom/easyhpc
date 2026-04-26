@@ -1,0 +1,16 @@
+---
+# LDAP client role defaults
+
+ldap_root_dn: "cn=admin,{{ ldap_suffix }}"
+ldap_service_accounts_ou: "ou=ServiceAccounts,{{ ldap_suffix }}"
+ldap_bind_cn: "ldap-bind"
+ldap_bind_dn: "cn={{ ldap_bind_cn }},{{ ldap_service_accounts_ou }}"
+ldap_people_ou: "ou=People,{{ ldap_suffix }}"
+ldap_groups_ou: "ou=Groups,{{ ldap_suffix }}"
+
+ldap_tls_cacert_redhat: "/etc/pki/ca-trust/source/anchors/easyhpc_ca.pem"
+ldap_tls_cacert_debian: "/usr/local/share/ca-certificates/easyhpc_ca.pem"
+ldap_tls_cert_path_redhat: "/etc/openldap/certs/ldap_server.pem"
+ldap_tls_cert_path_debian: "/etc/ssl/certs/ldap_server.pem"
+ldap_tls_key_path_redhat: "/etc/openldap/certs/ldap_server.key"
+ldap_tls_key_path_debian: "/etc/ssl/private/ldap_server.key"

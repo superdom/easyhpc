@@ -1,0 +1,91 @@
+---
+# Post: configure services and driver behavior
+
+- name: Configure NVIDIA kernel module parameters
+  ansible.builtin.copy:
+    dest: "{{ nvidia_driver_module_file }}"
+    content: |
+      # NVIDIA kernel module configuration
+      # Managed by Ansible
+      options nvidia NVreg_PreserveVideoMemoryAllocations=1
+      {{ nvidia_driver_module_params }}
+    mode: '0644'
+  when:
+    - nvidia_driver_module_params | length > 0
+  notify: Update initramfs for NVIDIA driver
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Check NVIDIA driver status
+  ansible.builtin.command: nvidia-smi
+  register: nvidia_smi_check
+  changed_when: false
+  failed_when: false
+
+- name: Enable and start nvidia-persistenced service (if available)
+  ansible.builtin.systemd:
+    name: nvidia-persistenced
+    enabled: true
+    state: started
+  register: nvidia_persistenced_start
+  failed_when: false
+  when:
+    - nvidia_driver_persistence_mode
+    - ansible_facts.services['nvidia-persistenced.service'] is defined
+    - nvidia_smi_check.rc == 0
+    - not nvidia_reboot_required | default(false)
+
+- name: Warn if nvidia-persistenced failed to start
+  ansible.builtin.debug:
+    msg: "WARNING: nvidia-persistenced failed to start. Check systemctl status and journalctl after reboot."
+  when:
+    - nvidia_persistenced_start is defined
+    - nvidia_persistenced_start is failed
+
+- name: Enable NVIDIA Fabric Manager service (if available)
+  ansible.builtin.systemd:
+    name: nvidia-fabricmanager
+    enabled: true
+  when:
+    - nvidia_fabric_manager_enabled
+    - ansible_facts.services['nvidia-fabricmanager.service'] is defined
+
+- name: Start NVIDIA Fabric Manager service (if driver is active)
+  ansible.builtin.systemd:
+    name: nvidia-fabricmanager
+    state: "{{ nvidia_fabric_manager_service_state }}"
+  register: nvidia_fm_start
+  failed_when: false
+  when:
+    - nvidia_fabric_manager_enabled
+    - ansible_facts.services['nvidia-fabricmanager.service'] is defined
+    - nvidia_smi_check.rc == 0
+    - not nvidia_reboot_required | default(false)
+
+- name: Warn if NVIDIA Fabric Manager failed to start
+  ansible.builtin.debug:
+    msg: "WARNING: nvidia-fabricmanager failed to start. Check systemctl status and journalctl after reboot."
+  when:
+    - nvidia_fm_start is defined
+    - nvidia_fm_start is failed
+
+- name: Configure performance mode
+  ansible.builtin.shell: |
+    if command -v nvidia-smi &> /dev/null; then
+      case "{{ nvidia_driver_performance_mode }}" in
+        max_performance)
+          nvidia-smi -pm 1
+          nvidia-smi -pl 300 2>/dev/null || true
+          ;;
+        power_save)
+          nvidia-smi -pm 0
+          ;;
+        *)
+          nvidia-smi -pm 1
+          ;;
+      esac
+    fi
+  changed_when: false
+  failed_when: false
+  when: nvidia_driver_performance_mode != 'default'

@@ -1,0 +1,46 @@
+---
+# NHC role defaults
+
+# NHC enable toggle
+nhc_enabled: false
+
+nhc_version: "1.4.3"
+nhc_src_url: "https://github.com/mej/nhc/releases/download/{{ nhc_version }}/lbnl-nhc-{{ nhc_version }}.tar.xz"
+
+# Install/layout
+nhc_install_dir: "/usr"
+nhc_config_dir: "/etc"
+nhc_libexec_dir: "/usr/libexec"
+nhc_build_dir: "/opt/easyhpc/build/nhc"
+nhc_sysconfig_dir: "/etc/sysconfig"
+nhc_extract_dir: "{{ nhc_build_dir }}/lbnl-nhc-{{ nhc_version }}"
+nhc_bin_path: "{{ nhc_install_dir }}/sbin/nhc"
+nhc_conf_path: "{{ nhc_config_dir }}/nhc/nhc.conf"
+
+# Build commands
+nhc_configure: "./configure --prefix={{ nhc_install_dir }} --sysconfdir={{ nhc_config_dir }} --libexecdir={{ nhc_libexec_dir }}"
+nhc_test: "make test"
+nhc_run_test: false
+nhc_make: "make install"
+
+# Templates/files
+nhc_config_template: "nhc.conf.j2"
+nhc_sysconfig_template: "sysconfig_nhc.j2"
+
+# Behavior flags
+nhc_force_reinstall: false
+nhc_build_deps: []
+nhc_ssh_daemon: "ssh"
+nhc_ssh_service: "{{ nhc_ssh_daemon }}"
+nhc_ssh_process: "sshd"
+nhc_check_ssh: false
+
+# GPU/IB health check tuning
+nhc_gpu_pcie_width: 16
+nhc_enable_gpu_dcgmi_diag: false
+nhc_enable_gpu_retired_pages_check: true
+nhc_enable_gpu_xid_check: true
+nhc_detect_ib: true
+nhc_enable_ib_ber_check: true
+nhc_ib_devices: []
+nhc_ipoib_interfaces: []

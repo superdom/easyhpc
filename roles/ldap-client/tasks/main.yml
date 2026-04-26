@@ -1,0 +1,163 @@
+---
+- name: Set LDAP client paths
+  ansible.builtin.set_fact:
+    ldap_tls_ca_path_effective: "{{ (ansible_facts.os_family == 'RedHat') | ternary(ldap_tls_cacert_redhat, ldap_tls_cacert_debian) }}"
+
+- name: Install LDAP client packages
+  ansible.builtin.package:
+    name: "{{ (ansible_facts.os_family == 'RedHat') | ternary(['sssd', 'openldap-clients'], ['sssd', 'ldap-utils', 'libnss-sss', 'libpam-sss']) }}"
+    state: present
+
+- name: Install oddjob for home directory creation (RedHat)
+  ansible.builtin.package:
+    name:
+      - oddjob
+      - oddjob-mkhomedir
+    state: present
+  when:
+    - ansible_facts.os_family == 'RedHat'
+    - ldap_pam_mkhomedir | default(false)
+
+- name: Ensure CA directory exists
+  ansible.builtin.file:
+    path: "{{ ldap_tls_ca_path_effective | dirname }}"
+    state: directory
+    mode: "0755"
+  when: ldap_tls_enabled | default(false)
+
+- name: Copy CA certificate
+  ansible.builtin.copy:
+    content: "{{ ldap_tls_ca_cert_content }}"
+    dest: "{{ ldap_tls_ca_path_effective }}"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - ldap_tls_ca_cert_content | length > 0
+
+- name: Copy CA certificate from controller file
+  ansible.builtin.copy:
+    src: "{{ ldap_tls_ca_cert_src }}"
+    dest: "{{ ldap_tls_ca_path_effective }}"
+    owner: root
+    group: root
+    mode: "0644"
+  no_log: true
+  when:
+    - ldap_tls_enabled | default(false)
+    - (ldap_tls_ca_cert_src | default('')) | length > 0
+
+- name: Check CA certificate presence
+  ansible.builtin.stat:
+    path: "{{ ldap_tls_ca_path_effective }}"
+  register: ldap_client_ca_stat
+  when: ldap_tls_enabled | default(false)
+
+- name: Fail when CA certificate is missing
+  ansible.builtin.fail:
+    msg: "CA certificate missing. Provide ldap_tls_ca_cert_content or place the file at {{ ldap_tls_ca_path_effective }}."
+  when:
+    - ldap_tls_enabled | default(false)
+    - not (ldap_client_ca_stat.stat.exists | default(false))
+
+- name: Refresh CA trust
+  ansible.builtin.command: "{{ (ansible_facts.os_family == 'RedHat') | ternary('update-ca-trust', 'update-ca-certificates') }}"
+  when: ldap_tls_enabled | default(false)
+  notify: restart sssd
+
+- name: Deploy sssd.conf
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: restart sssd
+
+- name: Ensure sss is present in nsswitch
+  ansible.builtin.replace:
+    path: /etc/nsswitch.conf
+    regexp: '^(passwd:\\s+.*?)(?:\\s+sss)?$'
+    replace: '\\1 sss'
+
+- name: Ensure sss is present in group entry
+  ansible.builtin.replace:
+    path: /etc/nsswitch.conf
+    regexp: '^(group:\\s+.*?)(?:\\s+sss)?$'
+    replace: '\\1 sss'
+
+- name: Ensure sss is present in shadow entry
+  ansible.builtin.replace:
+    path: /etc/nsswitch.conf
+    regexp: '^(shadow:\\s+.*?)(?:\\s+sss)?$'
+    replace: '\\1 sss'
+
+- name: Configure PAM on RedHat
+  ansible.builtin.command: "{{ ldap_pam_mkhomedir | default(false) | ternary('authselect select sssd with-mkhomedir --force', 'authselect select sssd --force') }}"
+  when: ansible_facts.os_family == 'RedHat'
+  notify: restart sssd
+
+- name: Ensure oddjobd is enabled and running (home creation helper)
+  ansible.builtin.service:
+    name: oddjobd
+    state: started
+    enabled: true
+  when:
+    - ansible_facts.os_family == 'RedHat'
+    - ldap_pam_mkhomedir | default(false)
+
+- name: Ensure pam_sss is present in common-auth (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-auth
+    insertafter: 'pam_unix.so'
+    line: "auth    [success=1 default=ignore]  pam_sss.so use_first_pass"
+    state: present
+  when: ansible_facts.os_family == 'Debian'
+  notify: restart sssd
+
+- name: Ensure pam_sss is present in common-account (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-account
+    insertafter: 'pam_unix.so'
+    line: "account [default=bad success=ok user_unknown=ignore] pam_sss.so"
+    state: present
+  when: ansible_facts.os_family == 'Debian'
+  notify: restart sssd
+
+- name: Ensure pam_sss is present in common-password (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-password
+    insertafter: 'pam_unix.so'
+    line: "password sufficient pam_sss.so use_authtok"
+    state: present
+  when: ansible_facts.os_family == 'Debian'
+  notify: restart sssd
+
+- name: Ensure pam_sss is present in common-session (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    insertafter: EOF
+    line: "session [success=ok ignore=ignore module_unknown=ignore module_failure=ignore] pam_sss.so"
+    state: present
+  when: ansible_facts.os_family == 'Debian'
+  notify: restart sssd
+
+- name: Ensure pam_mkhomedir is enabled (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/pam.d/common-session
+    insertafter: EOF
+    line: "session optional        pam_mkhomedir.so skel=/etc/skel umask=0077"
+    state: present
+  when:
+    - ansible_facts.os_family == 'Debian'
+    - ldap_pam_mkhomedir | default(false)
+  notify: restart sssd
+
+- name: Enable and start sssd
+  ansible.builtin.service:
+    name: sssd
+    enabled: true
+    state: started

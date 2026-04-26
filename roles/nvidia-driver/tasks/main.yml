@@ -1,0 +1,15 @@
+---
+# NVIDIA Driver installation orchestration (consolidated)
+
+- name: Run preflight checks for NVIDIA driver installation
+  ansible.builtin.include_tasks: preflight/main.yml
+
+- name: Install NVIDIA driver packages from repository
+  ansible.builtin.include_tasks: install/main.yml
+  when:
+    - nvidia_gpu_detected
+    - not (nvidia_driver_skip_install | default(false))
+
+- name: Configure and validate NVIDIA driver installation
+  ansible.builtin.include_tasks: post/main.yml
+  when: nvidia_gpu_detected

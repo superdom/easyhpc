@@ -1,0 +1,19 @@
+---
+# Slurm MySQL Database Role Defaults
+# System package installation
+
+# MySQL/MariaDB Configuration
+mysql_package_name: "mariadb-server"  # or "mysql-server"
+mysql_client_package_name: "mariadb-client"  # or "mysql-client"
+mysql_client_package_name_debian: "mariadb-client"
+mysql_client_package_name_redhat: "mariadb"
+mysql_service_name: "mariadb"  # or "mysql"
+# Socket paths (OS defaults; override if needed)
+mysql_socket_debian: "/var/run/mysqld/mysqld.sock"
+mysql_socket_redhat: "/var/lib/mysql/mysql.sock"
+mysql_socket: ""  # Empty string uses OS default socket
+mysql_root_password: "slurm_root_password_change_me"
+mysql_database: "slurm_acct_db"
+mysql_user: "{{ slurm_user.name | default('slurm') }}"
+mysql_password: "slurm_password_change_me"
+mysql_port: 3306

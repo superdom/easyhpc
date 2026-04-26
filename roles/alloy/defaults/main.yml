@@ -1,0 +1,38 @@
+---
+# Alloy defaults
+alloy_enabled: false
+alloy_version: "1.12.2"
+alloy_arch_map:
+  x86_64: "amd64"
+  amd64: "amd64"
+  aarch64: "arm64"
+  arm64: "arm64"
+alloy_download_dir: "/tmp"
+alloy_install_dir: "/usr/local/bin"
+alloy_bin_path: "{{ alloy_install_dir }}/alloy"
+alloy_config_dir: "/etc/alloy"
+alloy_config_file: "{{ alloy_config_dir }}/config.alloy"
+alloy_data_dir: "/var/lib/alloy"
+alloy_http_listen_addr: "127.0.0.1:12345"
+alloy_user:
+  name: "alloy"
+  uid: 10020
+  gid: 10020
+  group: "alloy"
+  home: "/var/lib/alloy"
+  shell: "/usr/sbin/nologin"
+  comment: "Grafana Alloy Agent"
+
+alloy_syslog_source: "{{ 'journal' if ansible_facts['os_family'] == 'RedHat' else 'file' }}"
+alloy_syslog_paths:
+  Debian:
+    - "/var/log/syslog"
+  RedHat:
+    - "/var/log/messages"
+
+alloy_journal_matches_syslog: "_TRANSPORT=syslog"
+
+alloy_slurm_log_dir: "{{ slurm_log_dir | default('/var/log/slurm') }}"
+alloy_loki_url: "http://{{ hostvars[groups['logging'][0]].ansible_host | default('localhost') }}:{{ loki_http_port | default(3100) }}/loki/api/v1/push"
+alloy_cluster_label: "{{ cluster_name | default('cluster') }}"
+alloy_log_level: "info"

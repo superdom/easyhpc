@@ -1,0 +1,653 @@
+---
+# SLURM Cluster Validation Playbook
+# EasyHPC - Cluster Validation and Health Checks
+
+- name: Validate SLURM Cluster
+  hosts: all
+  become: true
+  gather_facts: yes
+  strategy: free
+
+  vars_files:
+    - ../config/group_vars/slurm.yml
+    - ../config/group_vars/ldap.yml
+    - ../config/group_vars/services.yml
+
+  tasks:
+    - name: Detect NVIDIA GPU via sysfs
+      ansible.builtin.shell: |
+        for dev in /sys/bus/pci/devices/*; do
+          [ -f "$dev/vendor" ] || continue
+          if grep -q 0x10de "$dev/vendor"; then
+            exit 0
+          fi
+        done
+        exit 1
+      register: nvidia_gpu_sysfs
+      changed_when: false
+      failed_when: false
+
+    - name: Derive validation host facts
+      ansible.builtin.set_fact:
+        host_has_gpu: "{{ nvidia_gpu_sysfs.rc == 0 }}"
+
+    - name: Derive effective NFS mounts
+      ansible.builtin.set_fact:
+        nfs_mounts_effective: >-
+          {{
+            nfs_mounts
+            | default([])
+            | selectattr('server', 'defined')
+            | selectattr('server', 'match', '.+')
+            | list
+          }}
+      when:
+        - nfs_enable_client | default(false) | bool
+
+    - name: Check NVIDIA driver version
+      ansible.builtin.shell: "nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1"
+      register: nvidia_driver_version_check
+      changed_when: false
+      when:
+        - host_has_gpu | default(false)
+
+    - name: Report NVIDIA driver version
+      ansible.builtin.debug:
+        msg: >-
+          Expected NVIDIA driver {{ nvidia_driver_version_expected }}, detected {{ nvidia_driver_version_actual | default('unknown') }} -> {{
+          'OK' if nvidia_driver_version_match else 'MISMATCH' }}
+      vars:
+        nvidia_driver_version_expected: >-
+          {{
+            nvidia_driver_version if (nvidia_driver_strategy | default('branch')) == 'specific' and (nvidia_driver_version | default('') | length > 0)
+            else (nvidia_driver_branch | default('580'))
+          }}
+        nvidia_driver_version_actual: "{{ (nvidia_driver_version_check.stdout | default('')) | regex_search('([0-9.]+)', '\\1') | default('', true) }}"
+        nvidia_driver_version_match: >-
+          {{
+            (nvidia_driver_version_actual == nvidia_driver_version_expected)
+            if (nvidia_driver_strategy | default('branch')) == 'specific'
+            else (nvidia_driver_version_actual | default('')) is match('^' ~ nvidia_driver_version_expected ~ '\\\\.')
+          }}
+      when:
+        - host_has_gpu | default(false)
+
+    - name: Check GPU availability
+      ansible.builtin.command: nvidia-smi
+      register: gpu_info
+      when:
+        - is_slurm_compute | default(false)
+        - host_has_gpu | default(false)
+      changed_when: false
+
+    - name: Display GPU information
+      ansible.builtin.debug:
+        msg: "{{ (gpu_info | default({})).stdout | default('No GPU info collected') }}"
+      when:
+        - gpu_info is defined
+        - not (gpu_info.get('skipped', false) | bool)
+        - gpu_info.get('rc', 1) == 0
+
+    - name: Check Docker info
+      ansible.builtin.command: docker info
+      register: docker_info
+      when: docker_enabled | default(false)
+      changed_when: false
+
+    - name: Check Docker status
+      ansible.builtin.command: docker --version
+      register: docker_version_check
+      changed_when: false
+      when: docker_enabled | default(false)
+
+    - name: Report Docker version
+      ansible.builtin.debug:
+        msg: >-
+          Expected Docker {{ docker_version_expected }}, detected {{ docker_version_actual | default('unknown') }} -> {{
+          'OK' if (docker_version_actual | string).startswith(docker_version_expected | string) else 'MISMATCH' }}
+      vars:
+        docker_version_expected: "{{ docker_version | default('28') }}"
+        docker_version_raw: "{{ docker_version_check.stdout | default('') }}"
+        docker_version_matches: "{{ docker_version_raw | regex_findall('([0-9]+\\.[0-9]+)') }}"
+        docker_version_actual: "{{ (docker_version_matches | first) | default('', true) }}"
+      when: docker_enabled | default(false)
+
+    - name: Determine if host is targeted for Enroot
+      ansible.builtin.set_fact:
+        enroot_target_host: "{{ (enroot_enabled | default(false)) and (is_slurm_compute_or_login | default(false)) }}"
+      when: enroot_enabled | default(false)
+
+    - name: Check Enroot status
+      ansible.builtin.command: enroot version
+      register: enroot_version_check
+      changed_when: false
+      when:
+        - enroot_enabled | default(false)
+        - enroot_target_host | default(false)
+
+    - name: Report Enroot version
+      ansible.builtin.debug:
+        msg: >-
+          Expected Enroot {{ enroot_version | regex_replace('^v','') }}, detected {{ enroot_version_actual | default('unknown') }} -> {{
+          'OK' if enroot_version_actual == (enroot_version | regex_replace('^v','')) else 'MISMATCH' }}
+      vars:
+        enroot_version_raw: "{{ enroot_version_check.stdout | default('') }}"
+        enroot_version_actual: "{{ enroot_version_raw | regex_search('[0-9]+\\.[0-9]+\\.[0-9]+') | default('', true) }}"
+      when:
+        - enroot_enabled | default(false)
+        - enroot_target_host | default(false)
+
+    - name: Report Enroot validation skipped on this host
+      ansible.builtin.debug:
+        msg: "Enroot validation skipped on this host (not an enroot target)"
+      when:
+        - enroot_enabled | default(false)
+        - not (enroot_target_host | default(false))
+
+    - name: Check NFS mounts
+      ansible.builtin.command: "findmnt -rn -o FSTYPE,TARGET -T {{ item.mountpoint }}"
+      register: nfs_mount_checks
+      when:
+        - nfs_enable_client | default(false) | bool
+        - is_nfs_client | default(false)
+        - (nfs_mounts_effective | default([])) | length > 0
+      changed_when: false
+      loop: "{{ nfs_mounts_effective | default([]) }}"
+      loop_control:
+        label: "{{ item.mountpoint }}"
+
+    - name: Display NFS mount status
+      ansible.builtin.debug:
+        msg: >-
+          NFS mount {{ item.item.mountpoint }}: {{
+          'OK' if (
+            (item.stdout.split() | last | default('')) == item.item.mountpoint
+            and (item.stdout.split() | first | default('')) in ['nfs','nfs4','autofs']
+          )
+          else 'Not mounted' }}
+      when:
+        - nfs_mount_checks is defined
+      loop: "{{ nfs_mount_checks.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.mountpoint }}"
+
+    - name: Check NFS server status
+      ansible.builtin.command: systemctl is-active nfs-server
+      register: nfs_server_status
+      when:
+        - is_nfs_server | default(false)
+      changed_when: false
+
+    - name: Derive NFS server status result
+      ansible.builtin.set_fact:
+        nfs_server_status_result: "{{ 'OK' if (nfs_server_status is defined and nfs_server_status.get('rc', 1) == 0) else 'FAILED' }}"
+      when:
+        - is_nfs_server | default(false)
+
+    - name: Display NFS server status
+      ansible.builtin.debug:
+        msg: "NFS Server Status: {{ (nfs_server_status | default({})).stdout | default('Not checked') }}"
+      when:
+        - is_nfs_server | default(false)
+
+    - name: Check SLURM database daemon status
+      ansible.builtin.command: systemctl is-active slurmdbd
+      register: slurmdbd_status
+      when:
+        - slurm_accounting_enabled | default(false)
+        - "'slurmdbdservers' in group_names or (is_slurm_controller | default(false) and inventory_hostname == (groups['slurm-controller'][0] | default('')))"
+      changed_when: false
+
+    - name: Display SLURM database daemon status
+      ansible.builtin.debug:
+        msg: "SLURM DBD Status: {{ (slurmdbd_status | default({})).stdout | default('Not checked') }}"
+      when:
+        - slurm_accounting_enabled | default(false)
+        - "'slurmdbdservers' in group_names or (is_slurm_controller | default(false) and inventory_hostname == (groups['slurm-controller'][0] | default('')))"
+
+    - name: Check SLURM DBD port
+      ansible.builtin.wait_for:
+        port: "{{ slurm_dbd_port }}"
+        host: "127.0.0.1"
+        timeout: 3
+        state: started
+      register: slurmdbd_port_check
+      when:
+        - slurm_accounting_enabled | default(false)
+        - "'slurmdbdservers' in group_names or (is_slurm_controller | default(false) and inventory_hostname == (groups['slurm-controller'][0] | default('')))"
+      changed_when: false
+
+    - name: Display SLURM DBD port status
+      ansible.builtin.debug:
+        msg: "SLURM DBD Port: {{ 'OPEN' if (slurmdbd_port_check is defined and (slurmdbd_port_check.state | default('')) == 'started') else 'CLOSED' }}"
+      when:
+        - slurm_accounting_enabled | default(false)
+        - "'slurmdbdservers' in group_names or (is_slurm_controller | default(false) and inventory_hostname == (groups['slurm-controller'][0] | default('')))"
+
+    - name: Check hwloc version
+      ansible.builtin.command: "{{ hwloc_install_prefix }}/bin/hwloc-info --version"
+      register: hwloc_version_check
+      when: is_slurm_node | default(false)
+      changed_when: false
+
+    - name: Report hwloc version
+      ansible.builtin.debug:
+        msg: >-
+          Expected hwloc {{ hwloc_version }}, detected {{
+          hwloc_version_actual | default('unknown') }} -> {{
+          'OK' if hwloc_version_actual == hwloc_version else 'MISMATCH' }}
+      vars:
+        hwloc_version_actual: "{{ (hwloc_version_check.stdout | default('')) | regex_search('([0-9]+\\.[0-9]+\\.[0-9]+)') | default('', true) }}"
+      when: is_slurm_node | default(false)
+
+    - name: Check PMIx version
+      ansible.builtin.shell: |
+        set +e
+        "{{ pmix_install_prefix }}/bin/pmix_info" 2>&1 | awk -F': ' '/PMIX:/{print $2; exit}'
+      register: pmix_version_check
+      when: is_slurm_node | default(false)
+      changed_when: false
+
+    - name: Report PMIx version
+      ansible.builtin.debug:
+        msg: >-
+          Expected PMIx {{ pmix_version }}, detected {{
+          pmix_version_actual | default('unknown') }} -> {{
+          'OK' if pmix_version_actual == pmix_version else 'MISMATCH' }}
+      vars:
+        pmix_version_raw: "{{ (pmix_version_check.stdout | default('')) ~ ' ' ~ (pmix_version_check.stderr | default('')) }}"
+        pmix_version_from_output: "{{ (pmix_version_raw | regex_findall('([0-9]+\\.[0-9]+\\.[0-9]+)') | first) | default('', true) }}"
+        pmix_version_actual: >-
+          {{
+            pmix_version_from_output
+            if (pmix_version_from_output | length) > 0
+            else ('Not Installed' if (pmix_version_check.rc | default(1) | int) != 0 else 'unknown')
+          }}
+      when: is_slurm_node | default(false)
+
+    - name: Check SLURM controller daemon status
+      ansible.builtin.command: systemctl is-active slurmctld
+      register: controller_status
+      when: is_slurm_controller | default(false)
+      changed_when: false
+
+    - name: Display SLURM controller status
+      ansible.builtin.debug:
+        msg: "SLURM Controller Status: {{ (controller_status | default({})).stdout | default('Not checked') }}"
+      when: is_slurm_controller | default(false)
+
+    - name: Check SLURM node daemon status
+      ansible.builtin.command: systemctl is-active slurmd
+      register: node_status
+      when: is_slurm_compute | default(false)
+      changed_when: false
+
+    - name: Display SLURM node status
+      ansible.builtin.debug:
+        msg: "SLURM Node Daemon Status: {{ (node_status | default({})).stdout | default('Not checked') }}"
+      when: is_slurm_compute | default(false)
+
+    - name: Check Munge daemon status
+      ansible.builtin.command: systemctl is-active munge
+      register: munge_status
+      when: is_slurm_node | default(false)
+      changed_when: false
+
+    - name: Display Munge status
+      ansible.builtin.debug:
+        msg: "Munge Status: {{ (munge_status | default({})).stdout | default('Not checked') }}"
+      when: is_slurm_node | default(false)
+
+    - name: Check Slurm Status (controller)
+      ansible.builtin.command: slurmctld --version
+      register: slurm_version_controller
+      changed_when: false
+      environment:
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
+      when: is_slurm_controller | default(false)
+
+    - name: Report Slurm version (controller)
+      ansible.builtin.debug:
+        msg: >-
+          Expected Slurm {{ slurm_version }}, detected {{
+          slurm_version_controller_actual | default('unknown') }} -> {{
+          'OK' if slurm_version_controller_actual == slurm_version else 'MISMATCH' }}
+      vars:
+        slurm_version_controller_actual: "{{ (slurm_version_controller.stdout | default('')) | regex_findall('[0-9]+\\.[0-9]+\\.[0-9]+') | first | default('', true) }}"
+      when: is_slurm_controller | default(false)
+
+    - name: Check Slurm Status (node/login)
+      ansible.builtin.command: slurmd --version
+      register: slurm_version_node
+      changed_when: false
+      environment:
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
+      when: is_slurm_compute_or_login | default(false)
+
+    - name: Report Slurm version (node/login)
+      ansible.builtin.debug:
+        msg: >-
+          Expected Slurm {{ slurm_version }}, detected {{
+          slurm_version_node_actual | default('unknown') }} -> {{
+          'OK' if slurm_version_node_actual == slurm_version else 'MISMATCH' }}
+      vars:
+        slurm_version_node_actual: "{{ (slurm_version_node.stdout | default('')) | regex_findall('[0-9]+\\.[0-9]+\\.[0-9]+') | first | default('', true) }}"
+      when: is_slurm_compute_or_login | default(false)
+
+    - name: Get cluster information
+      ansible.builtin.command: sinfo -Nel
+      register: cluster_info
+      delegate_to: "{{ groups['slurm-controller'][0] }}"
+      when: is_slurm_controller | default(false)
+      changed_when: false
+      environment:
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
+
+    - name: Display cluster information
+      ansible.builtin.debug:
+        msg: "{{ (cluster_info | default({})).stdout_lines | default([]) }}"
+
+    - name: Check SLURM cluster health
+      ansible.builtin.command: "{{ slurm_install_prefix }}/bin/scontrol ping"
+      register: slurm_cluster_health
+      delegate_to: "{{ groups['slurm-controller'][0] }}"
+      when: groups['slurm-controller'] | length > 0
+      changed_when: false
+      run_once: true
+
+    - name: Display SLURM cluster health
+      ansible.builtin.debug:
+        msg: "{{ slurm_cluster_health.stdout | default('N/A') }}"
+      when: slurm_cluster_health is defined
+      run_once: true
+
+    - name: Check SLURM node registration
+      ansible.builtin.command: "{{ slurm_install_prefix }}/bin/scontrol show nodes"
+      register: slurm_nodes_status
+      delegate_to: "{{ groups['slurm-controller'][0] }}"
+      when: groups['slurm-controller'] | length > 0
+      changed_when: false
+      run_once: true
+
+    - name: Display SLURM node registration
+      ansible.builtin.debug:
+        msg: "{{ slurm_nodes_status.stdout_lines | default([]) }}"
+      when: slurm_nodes_status is defined
+      run_once: true
+
+    - name: Check SLURM GPU resources
+      ansible.builtin.command: "{{ slurm_install_prefix }}/bin/sinfo -Nel -o \"%N,%G\""
+      register: slurm_gpu_info
+      delegate_to: "{{ groups['slurm-controller'][0] }}"
+      when:
+        - groups['slurm-controller'] | length > 0
+      changed_when: false
+      run_once: true
+
+    - name: Display SLURM GPU resources
+      ansible.builtin.debug:
+        msg: "{{ slurm_gpu_info.stdout_lines | default([]) }}"
+      when:
+        - slurm_gpu_info is defined
+      run_once: true
+
+    - name: Check Pyxis version source
+      ansible.builtin.stat:
+        path: "{{ pyxis_source_dir | default('/usr/local/src/pyxis', true) }}"
+      register: pyxis_source_dir_stat
+      when: pyxis_enabled | default(false)
+
+    - name: Get Pyxis version from git
+      ansible.builtin.command: git -C "{{ pyxis_source_dir | default('/usr/local/src/pyxis', true) }}" describe --tags --abbrev=0
+      register: pyxis_version_check
+      changed_when: false
+      when:
+        - pyxis_enabled | default(false)
+        - pyxis_source_dir_stat.stat.exists | default(false)
+
+    - name: Report Pyxis version
+      ansible.builtin.debug:
+        msg: >-
+          Expected Pyxis {{ pyxis_version | regex_replace('^v','') }}, detected {{ pyxis_version_actual | default('unknown') }} -> {{
+          'OK' if pyxis_version_actual == (pyxis_version | regex_replace('^v','')) else 'MISMATCH' }}
+      vars:
+        pyxis_version_actual: "{{ (pyxis_version_check.stdout | default('')) | regex_replace('^v','') | default('', true) }}"
+      when:
+        - pyxis_enabled | default(false)
+        - pyxis_source_dir_stat.stat.exists | default(false)
+
+    - name: Check if NHC binary exists
+      ansible.builtin.set_fact:
+        nhc_bin_path_resolved: "{{ nhc_bin_path | default('/usr/sbin/nhc') }}"
+        nhc_version_resolved: "{{ nhc_version | default('1.4.3') }}"
+        nhc_extract_dir_resolved: "{{ nhc_extract_dir | default('/opt/easyhpc/build/nhc/lbnl-nhc-' ~ (nhc_version | default('1.4.3'))) }}"
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+
+    - name: Check if NHC binary exists
+      ansible.builtin.stat:
+        path: "{{ nhc_bin_path_resolved }}"
+      register: nhc_bin_stat
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+
+    - name: Fail if NHC binary is missing
+      ansible.builtin.fail:
+        msg: "NHC binary not found at {{ nhc_bin_path_resolved }} on compute node."
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+        - nhc_bin_stat is defined
+        - not (nhc_bin_stat.stat.exists | default(false))
+
+    - name: Check if NHC build directory exists
+      ansible.builtin.stat:
+        path: "{{ nhc_extract_dir_resolved }}"
+      register: nhc_build_dir_stat
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+
+    - name: Detect NHC version
+      ansible.builtin.command: "{{ nhc_bin_path_resolved }} --version"
+      register: nhc_version_check
+      changed_when: false
+      failed_when: false
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+        - nhc_bin_stat.stat.exists | default(false)
+        - nhc_bin_path_resolved is defined
+
+    - name: Report NHC version
+      ansible.builtin.debug:
+        msg: >-
+          Expected NHC {{ nhc_version_resolved }}, detected {{ nhc_version_actual | default('unknown') }} -> {{
+          'OK' if (nhc_version_actual | string).startswith(nhc_version_resolved | string) else 'MISMATCH' }}
+      vars:
+        nhc_version_raw: "{{ (nhc_version_check.stdout | default('')) | trim }}"
+        nhc_version_from_bin: "{{ (nhc_version_raw | regex_findall('([0-9]+\\.[0-9]+\\.[0-9]+)') | first) | default('', true) }}"
+        nhc_version_from_dir: "{{ nhc_version_resolved if nhc_build_dir_stat.stat.exists | default(false) else '' }}"
+        nhc_version_actual: "{{ nhc_version_from_bin or nhc_version_from_dir or 'Not Installed' }}"
+      when:
+        - nhc_enabled | default(false)
+        - is_slurm_compute | default(false)
+        - nhc_version_resolved is defined
+
+    - name: Check if Lmod install directory exists
+      ansible.builtin.stat:
+        path: "/usr/local/lmod/lmod/{{ lmod_version }}/"
+      register: lmod_install_dir
+      when: lmod_enabled | default(false)
+
+    - name: Detect Lmod version from fixed install directory
+      ansible.builtin.shell: |
+        if [ -d "/usr/local/lmod/lmod/{{ lmod_version }}/" ]; then
+          echo "{{ lmod_version }}"
+        else
+          exit 1
+        fi
+      register: lmod_version_check
+      changed_when: false
+      when:
+        - lmod_enabled | default(false)
+        - lmod_install_dir.stat.exists | default(false)
+
+    - name: Report Lmod version
+      ansible.builtin.debug:
+        msg: >-
+          Expected Lmod {{ lmod_version }}, detected {{ lmod_version_actual | default('unknown') }} -> {{
+          'OK' if (lmod_version_actual | string).startswith(lmod_version | string) else 'MISMATCH' }}
+      vars:
+        lmod_version_raw: "{{ (lmod_version_check.stdout | default('')) | trim }}"
+        lmod_version_actual: "{{ (lmod_version_raw | regex_findall('([0-9]+\\.[0-9]+\\.[0-9]+)') | first) | default('Not Installed', true) }}"
+      when:
+        - lmod_enabled | default(false)
+        - lmod_install_dir.stat.exists | default(false)
+
+    - name: Check EasyBuild version
+      ansible.builtin.shell: |
+        set -e
+        if [ -f /etc/profile.d/z00_lmod.sh ]; then
+          source /etc/profile.d/z00_lmod.sh
+        fi
+        module use {{ easybuild_modules_path | default(modules_path | default('/data/apps/modules/all')) }}
+        module load EasyBuild
+        eb --version
+      register: easybuild_version_check
+      changed_when: false
+      when:
+        - easybuild_enabled | default(false)
+        - is_easybuild_host | default(false)
+
+    - name: Report EasyBuild version
+      ansible.builtin.debug:
+        msg: >-
+          Expected EasyBuild {{ easybuild_version_expected }}, detected {{
+          easybuild_version_actual | default('unknown') }} -> {{
+          'OK' if easybuild_version_actual == easybuild_version_expected else 'MISMATCH' }}
+      vars:
+        easybuild_version_expected: "{{ easybuild_version | default('5.1.1') }}"
+        easybuild_version_actual: "{{ (easybuild_version_check.stdout | default('')) | regex_search('([0-9]+\\.[0-9]+\\.[0-9]+)') | default('', true) }}"
+      when:
+        - easybuild_enabled | default(false)
+        - is_easybuild_host | default(false)
+
+    - name: Check Loki readiness
+      ansible.builtin.uri:
+        url: "http://localhost:{{ loki_http_port }}/ready"
+        status_code: 200
+      register: loki_status
+      when:
+        - loki_enabled | default(false)
+        - is_logging_node | default(false)
+      changed_when: false
+
+    - name: Display Loki status
+      ansible.builtin.debug:
+        msg: "Loki Status: {{ 'OK' if (loki_status.status | default(0)) == 200 else 'FAILED' }}"
+      when:
+        - loki_enabled | default(false)
+        - is_logging_node | default(false)
+
+    - name: Check Alloy service status
+      ansible.builtin.command: systemctl is-active alloy
+      register: alloy_status
+      when: alloy_enabled | default(false)
+      changed_when: false
+
+    - name: Display Alloy status
+      ansible.builtin.debug:
+        msg: "Alloy Status: {{ (alloy_status | default({})).stdout | default('Not checked') }}"
+      when: alloy_enabled | default(false)
+
+    - name: Check Prometheus Node Exporter
+      ansible.builtin.uri:
+        url: "http://localhost:{{ node_exporter_port }}/metrics"
+        method: GET
+      register: node_exporter_status
+      when: monitoring_enabled | default(false)
+      changed_when: false
+
+    - name: Display Node Exporter status
+      ansible.builtin.debug:
+        msg: "Node Exporter Status: HTTP {{ (node_exporter_status | default({})).status | default('unknown') }}"
+      when: node_exporter_status is defined and (node_exporter_status.get('status', None)) is not none
+
+    - name: Check SLURM Exporter
+      ansible.builtin.uri:
+        url: "http://localhost:{{ slurm_exporter_port }}/metrics"
+        method: GET
+      register: slurm_exporter_status
+      when:
+        - monitoring_enabled | default(false)
+        - is_slurm_controller | default(false)
+      changed_when: false
+
+    - name: Display SLURM Exporter status
+      ansible.builtin.debug:
+        msg: "SLURM Exporter Status: HTTP {{ (slurm_exporter_status | default({})).status | default('unknown') }}"
+      when: slurm_exporter_status is defined and (slurm_exporter_status.get('status', None)) is not none
+
+    - name: Check DCGM Exporter
+      ansible.builtin.uri:
+        url: "http://localhost:{{ dcgm_exporter_port }}/metrics"
+        method: GET
+      register: dcgm_exporter_status
+      when:
+        - monitoring_enabled | default(false)
+        - is_slurm_compute | default(false)
+        - host_has_gpu | default(false)
+      changed_when: false
+
+    - name: Display DCGM Exporter status
+      ansible.builtin.debug:
+        msg: "DCGM Exporter Status: HTTP {{ (dcgm_exporter_status | default({})).status | default('unknown') }}"
+      when: dcgm_exporter_status is defined and (dcgm_exporter_status.get('status', None)) is not none
+
+    - name: Check Prometheus HTTP endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:{{ prometheus_port }}/-/healthy"
+        method: GET
+      register: prometheus_http_check
+      when:
+        - monitoring_enabled | default(false)
+        - is_monitoring_node | default(false)
+      changed_when: false
+
+    - name: Display Prometheus HTTP status
+      ansible.builtin.debug:
+        msg: "Prometheus HTTP Status: HTTP {{ (prometheus_http_check | default({})).status | default('unknown') }}"
+      when: prometheus_http_check is defined and (prometheus_http_check.get('status', None)) is not none
+
+    - name: Check Grafana HTTP endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:{{ grafana_port }}/api/health"
+        method: GET
+      register: grafana_http_check
+      when:
+        - monitoring_enabled | default(false)
+        - is_monitoring_node | default(false)
+      changed_when: false
+
+    - name: Display Grafana HTTP status
+      ansible.builtin.debug:
+        msg: "Grafana HTTP Status: HTTP {{ (grafana_http_check | default({})).status | default('unknown') }}"
+      when: grafana_http_check is defined and (grafana_http_check.get('status', None)) is not none
+
+    - name: Check Alertmanager HTTP endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:{{ alertmanager_port }}/-/healthy"
+        method: GET
+      register: alertmanager_http_check
+      when:
+        - monitoring_enabled | default(false)
+        - is_monitoring_node | default(false)
+      changed_when: false
+
+    - name: Display Alertmanager HTTP status
+      ansible.builtin.debug:
+        msg: "Alertmanager HTTP Status: HTTP {{ (alertmanager_http_check | default({})).status | default('unknown') }}"
+      when: alertmanager_http_check is defined and (alertmanager_http_check.get('status', None)) is not none

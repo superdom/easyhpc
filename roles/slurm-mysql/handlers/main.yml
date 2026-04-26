@@ -1,0 +1,7 @@
+---
+# Slurm MySQL Role Handlers
+
+- name: restart mysql service
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name | default('mariadb') }}"
+    state: restarted

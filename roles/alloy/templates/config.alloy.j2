@@ -1,0 +1,45 @@
+{% if alloy_syslog_source == 'file' and (alloy_syslog_paths_resolved | length) > 0 %}
+loki.source.file "syslog" {
+  targets = [
+{% for path in alloy_syslog_paths_resolved %}
+    { __path__ = "{{ path }}", job = "syslog", log_type = "syslog", host = "{{ inventory_hostname }}", cluster = "{{ alloy_cluster_label }}", node_role = "{{ alloy_node_role }}" },
+{% endfor %}
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+{% else %}
+loki.source.journal "syslog" {
+  matches = "{{ alloy_journal_matches_syslog }}"
+  labels = {
+    job = "syslog",
+    log_type = "syslog",
+    host = "{{ inventory_hostname }}",
+    cluster = "{{ alloy_cluster_label }}",
+    node_role = "{{ alloy_node_role }}",
+  }
+  forward_to = [loki.write.default.receiver]
+}
+{% endif %}
+
+{% if alloy_slurm_enabled | default(false) %}
+loki.source.file "slurm" {
+  targets = [
+{% if is_slurm_controller | default(false) %}
+    { __path__ = "{{ alloy_slurm_log_dir }}/slurmctld.log", job = "slurm", log_type = "slurm", component = "slurmctld", host = "{{ inventory_hostname }}", cluster = "{{ alloy_cluster_label }}", node_role = "{{ alloy_node_role }}" },
+{% endif %}
+{% if is_slurm_compute | default(false) %}
+    { __path__ = "{{ alloy_slurm_log_dir }}/slurmd.log", job = "slurm", log_type = "slurm", component = "slurmd", host = "{{ inventory_hostname }}", cluster = "{{ alloy_cluster_label }}", node_role = "{{ alloy_node_role }}" },
+{% endif %}
+{% if slurm_accounting_enabled | default(false) and is_slurm_controller | default(false) %}
+    { __path__ = "{{ alloy_slurm_log_dir }}/slurmdbd.log", job = "slurm", log_type = "slurm", component = "slurmdbd", host = "{{ inventory_hostname }}", cluster = "{{ alloy_cluster_label }}", node_role = "{{ alloy_node_role }}" },
+{% endif %}
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+{% endif %}
+
+loki.write "default" {
+  endpoint {
+    url = "{{ alloy_loki_url }}"
+  }
+}

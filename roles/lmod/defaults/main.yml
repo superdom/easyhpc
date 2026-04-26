@@ -1,0 +1,44 @@
+---
+# Lmod role defaults
+
+# Lmod enable toggle
+lmod_enabled: false
+
+# Installation layout
+lmod_install_prefix: "/usr/local"
+lmod_install_base: "{{ lmod_install_prefix }}/lmod"
+lmod_home: "{{ lmod_install_base }}/lmod/lmod"
+
+# Default Lmod version; override in inventory/group vars as needed
+lmod_version: "8.7.67"
+
+# Module tree paths
+lmod_modules_root: "{{ modules_root | default((modules_base_path | default('/data/apps')) ~ '/modules') }}"
+lmod_modules_path: "{{ modules_path | default(lmod_modules_root ~ '/all') }}"
+lmod_cache_dir: "{{ modules_cache_dir | default(lmod_modules_root ~ '/cache') }}"
+
+# Shared storage integration
+lmod_storage_path: "{{ modules_storage_path | default(modules_base_path | default('/data/apps')) }}"
+lmod_manage_shared_paths: "{{ modules_manage_shared_paths | default(true) }}"
+lmod_storage_host: >-
+  {{
+    modules_storage_host
+    | default(
+        (groups['slurm-controller'] | default([]) | first)
+        | default(inventory_hostname)
+      )
+  }}
+lmod_directory_owner: >-
+  {{
+    modules_directory_owner
+    | default(modules_base_owner | default(ansible_facts.env.SUDO_USER | default(ansible_user)))
+  }}
+lmod_directory_group: >-
+  {{
+    modules_directory_group
+    | default(
+        modules_base_group
+        | default(modules_base_owner | default(ansible_facts.env.SUDO_USER | default(ansible_user)))
+      )
+  }}
+lmod_directory_mode: "{{ modules_directory_mode | default(modules_base_mode | default('2775')) }}"

@@ -1,0 +1,60 @@
+#
+# Minimal slurm.conf for configless slurmd
+#
+# The full configuration is fetched from the controller and cached under
+# SlurmdSpoolDir/conf-cache.
+#
+
+{% if slurm_config.ClusterName is defined %}
+ClusterName={{ slurm_config.ClusterName }}
+{% endif %}
+{% if slurm_config.SlurmctldHost is defined %}
+{% set configured_slurmctld_host = slurm_config.SlurmctldHost %}
+{% else %}
+{% set configured_slurmctld_host = groups['slurm-controller'][0] | default('localhost') %}
+{% endif %}
+
+{% set ctld_hosts = slurmctld_hosts | default(groups['slurm-controller'] | default([])) %}
+{% set ha_mode = slurm_ha_enabled | default(false) | bool %}
+
+{% if ha_mode %}
+{% for host in ctld_hosts %}
+SlurmctldHost={{ host }}
+{% endfor %}
+{% else %}
+SlurmctldHost={{ configured_slurmctld_host }}
+{% if slurm_backup_controller is defined and slurm_backup_controller != '' and slurm_backup_controller != configured_slurmctld_host %}
+BackupController={{ slurm_backup_controller }}
+{% endif %}
+{% endif %}
+{% if slurm_config.SlurmctldPort is defined %}
+SlurmctldPort={{ slurm_config.SlurmctldPort }}
+{% endif %}
+{% if slurm_config.SlurmdPort is defined %}
+SlurmdPort={{ slurm_config.SlurmdPort }}
+{% endif %}
+{% if slurm_config.SlurmUser is defined %}
+SlurmUser={{ slurm_config.SlurmUser }}
+{% endif %}
+{% if slurm_config.AuthType is defined %}
+AuthType={{ slurm_config.AuthType }}
+{% endif %}
+{% if slurm_config.SlurmdSpoolDir is defined %}
+SlurmdSpoolDir={{ slurm_config.SlurmdSpoolDir }}
+{% endif %}
+{% if slurm_config.SlurmdLogFile is defined %}
+SlurmdLogFile={{ slurm_config.SlurmdLogFile }}
+{% endif %}
+{% if slurm_config.SlurmdPidFile is defined %}
+SlurmdPidFile={{ slurm_config.SlurmdPidFile }}
+{% endif %}
+{% if slurm_config.SlurmdParameters is defined %}
+SlurmdParameters={{ slurm_config.SlurmdParameters }}
+{% endif %}
+{% if slurm_config.SlurmctldParameters is defined %}
+SlurmctldParameters={{ slurm_config.SlurmctldParameters }}
+{% endif %}
+{% if slurm_configless_enabled | default(false) | bool %}
+{% set local_facts = hostvars[inventory_hostname].get('ansible_facts', {}) %}
+NodeName={{ local_facts.get('hostname', inventory_hostname) }}
+{% endif %}

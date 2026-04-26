@@ -1,0 +1,9 @@
+---
+# Backward-compat shim: reuse post validation
+
+- name: Wait for NVIDIA driver to initialize
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: Run standard post-install validation
+  ansible.builtin.include_tasks: post/validate.yml

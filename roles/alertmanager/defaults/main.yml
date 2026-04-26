@@ -1,0 +1,14 @@
+---
+# Alertmanager defaults (container-based deployment)
+
+alertmanager_version: "v0.27.0"
+alertmanager_image_repo: "prom/alertmanager"
+alertmanager_image: "{{ alertmanager_image_repo }}:{{ alertmanager_version | default('latest') }}"
+alertmanager_container_name: "alertmanager"
+alertmanager_service_name: "alertmanager"
+alertmanager_config_dir: "/etc/alertmanager"
+alertmanager_data_dir: "/var/lib/alertmanager"
+alertmanager_volume_name: "alertmanager-data"
+alertmanager_docker_network_mode: "host"
+alertmanager_port: 9093
+alertmanager_force_reinstall: false

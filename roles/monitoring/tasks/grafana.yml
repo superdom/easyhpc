@@ -1,0 +1,171 @@
+---
+# Grafana setup tasks
+
+- name: Check if Grafana container exists
+  ansible.builtin.command: docker ps -a --filter name=grafana --format "{{ '{{' }}.Names{{ '}}' }}"
+  register: grafana_container_check
+  changed_when: false
+  failed_when: false
+
+- name: Determine if Grafana needs reinstallation
+  ansible.builtin.set_fact:
+    grafana_needs_reinstall: "{{ grafana_force_reinstall | default(false) | bool }}"
+
+- name: Stop and remove Grafana container if force reinstall
+  ansible.builtin.command: docker stop grafana && docker rm grafana
+  when:
+    - grafana_needs_reinstall | default(false) | bool
+    - grafana_container_check.stdout != ""
+  ignore_errors: yes
+
+- name: Create Grafana directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ grafana_data_dir | default('/var/lib/grafana') }}"
+    - /etc/grafana/provisioning
+    - /etc/grafana/provisioning/datasources
+    - /etc/grafana/provisioning/dashboards
+    - /etc/grafana/provisioning/dashboards-json
+
+- name: Deploy Grafana datasource provisioning
+  ansible.builtin.template:
+    src: grafana-datasource.yml.j2
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart grafana
+
+- name: Deploy Grafana dashboard provider provisioning
+  ansible.builtin.template:
+    src: grafana-dashboard-provider.yml.j2
+    dest: /etc/grafana/provisioning/dashboards/default.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart grafana
+
+- name: Remove legacy DCGM GPU dashboard
+  ansible.builtin.file:
+    path: /etc/grafana/provisioning/dashboards-json/dcgm-gpu-dashboard.json
+    state: absent
+  notify: restart grafana
+
+- name: Download Node Exporter dashboard
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ grafana_node_exporter_dashboard_id }}/revisions/{{ grafana_dashboard_revision | default('latest') }}/download"
+    dest: /etc/grafana/provisioning/dashboards-json/node-exporter-full.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Set Prometheus datasource for Node Exporter dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/node-exporter-full.json
+    regexp: '\$\{DS_PROMETHEUS\}|\$DS_PROMETHEUS'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Normalize datasource variable in Node Exporter dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/node-exporter-full.json
+    regexp: '\$datasource'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Download Slurm dashboard
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ grafana_slurm_dashboard_id }}/revisions/{{ grafana_dashboard_revision | default('latest') }}/download"
+    dest: /etc/grafana/provisioning/dashboards-json/slurm-dashboard.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Set Prometheus datasource for Slurm dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/slurm-dashboard.json
+    regexp: '\$\{DS_PROMETHEUS\}|\$DS_PROMETHEUS'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Normalize datasource variable in Slurm dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/slurm-dashboard.json
+    regexp: '\$datasource'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Download GPU nodes dashboard
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ grafana_gpu_nodes_dashboard_id }}/revisions/{{ grafana_dashboard_revision | default('latest') }}/download"
+    dest: /etc/grafana/provisioning/dashboards-json/gpu-nodes-dashboard.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Set Prometheus datasource for GPU nodes dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/gpu-nodes-dashboard.json
+    regexp: '\$\{DS_PROMETHEUS\}|\$DS_PROMETHEUS'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Normalize datasource variable in GPU nodes dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/gpu-nodes-dashboard.json
+    regexp: '\$datasource'
+    replace: 'Prometheus'
+  notify: restart grafana
+
+- name: Download Syslog dashboard
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ grafana_syslog_dashboard_id }}/revisions/{{ grafana_dashboard_revision | default('latest') }}/download"
+    dest: /etc/grafana/provisioning/dashboards-json/syslog-dashboard.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Set Loki datasource for Syslog dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/syslog-dashboard.json
+    regexp: '\$\{DS_LOKI\}|\$DS_LOKI'
+    replace: 'Loki'
+  notify: restart grafana
+
+- name: Normalize datasource variable in Syslog dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/syslog-dashboard.json
+    regexp: '\$datasource'
+    replace: 'Loki'
+  notify: restart grafana
+
+- name: Download Slurm log dashboard
+  ansible.builtin.get_url:
+    url: "https://grafana.com/api/dashboards/{{ grafana_slurm_log_dashboard_id }}/revisions/{{ grafana_dashboard_revision | default('latest') }}/download"
+    dest: /etc/grafana/provisioning/dashboards-json/slurm-log-dashboard.json
+    mode: '0644'
+  notify: restart grafana
+
+- name: Set Loki datasource for Slurm log dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/slurm-log-dashboard.json
+    regexp: '\$\{DS_LOKI\}|\$DS_LOKI'
+    replace: 'Loki'
+  notify: restart grafana
+
+- name: Normalize datasource variable in Slurm log dashboard
+  ansible.builtin.replace:
+    path: /etc/grafana/provisioning/dashboards-json/slurm-log-dashboard.json
+    regexp: '\$datasource'
+    replace: 'Loki'
+  notify: restart grafana
+
+- name: Ensure Grafana data directory ownership for container user
+  ansible.builtin.file:
+    path: "{{ grafana_data_dir | default('/var/lib/grafana') }}"
+    state: directory
+    owner: "472"
+    group: "472"
+    mode: "0755"
+    recurse: true

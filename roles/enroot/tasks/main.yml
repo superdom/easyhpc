@@ -1,0 +1,68 @@
+---
+# Enroot Role - Container Runtime for SLURM
+# Based on NVIDIA ansible-role-enroot
+
+- name: Check if Enroot is installed
+  ansible.builtin.command: enroot version
+  register: enroot_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Determine if Enroot needs installation or reinstallation
+  ansible.builtin.set_fact:
+    enroot_needs_install: "{{ (enroot_force_reinstall | default(false) | bool) or (enroot_version_check.rc != 0) }}"
+
+- name: Validate enroot version is specified
+  ansible.builtin.fail:
+    msg: "enroot_version must be specified (e.g., 'v3.5.0' or '3.5.0'). 'latest' is not supported - please specify an exact version."
+  when:
+    - enroot_needs_install | default(true) | bool
+    - enroot_version is not defined or enroot_version == "" or enroot_version == "latest"
+
+- name: Set enroot version variables
+  ansible.builtin.set_fact:
+    enroot_version_clean: "{{ enroot_version | regex_replace('^v', '') }}"
+    enroot_version_tag: "v{{ enroot_version | regex_replace('^v', '') }}"
+  when: enroot_needs_install | default(true) | bool
+
+- name: Ubuntu tasks
+  ansible.builtin.include_tasks: ubuntu.yml
+  when:
+    - ansible_facts["os_family"] == "Debian"
+    - enroot_needs_install | default(true) | bool
+
+- name: RedHat tasks
+  ansible.builtin.include_tasks: redhat.yml
+  when:
+    - ansible_facts["os_family"] == "RedHat"
+    - enroot_needs_install | default(true) | bool
+
+- name: Ensure bash completion dir exists
+  ansible.builtin.file:
+    path: /etc/bash_completion.d
+    owner: root
+    group: root
+    mode: '0755'
+    state: directory
+  when: enroot_needs_install | default(true) | bool
+
+- name: Install bash completions
+  ansible.builtin.file:
+    path: /etc/bash_completion.d/enroot.bash_completion
+    state: link
+    src: /usr/share/enroot/bash_completion
+  when:
+    - enroot_needs_install | default(true) | bool
+    - ansible_facts["os_family"] == "Debian"
+
+- name: Verify Enroot installation
+  ansible.builtin.command: enroot version
+  register: enroot_installed_version
+  changed_when: false
+  failed_when: false
+  when: enroot_needs_install | default(true) | bool
+
+- name: Display Enroot installation status
+  ansible.builtin.debug:
+    msg: "Enroot: {{ enroot_installed_version.stdout if (enroot_installed_version is defined and enroot_installed_version.rc == 0) else 'Installation failed or not found' }}"
+  when: enroot_needs_install | default(true) | bool

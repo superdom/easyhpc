@@ -1,0 +1,5 @@
+---
+# Backward-compat shim: use consolidated post/reboot tasks
+
+- name: Include post-reboot tasks
+  ansible.builtin.include_tasks: post/reboot.yml

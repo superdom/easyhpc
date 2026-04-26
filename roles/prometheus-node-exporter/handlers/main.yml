@@ -1,0 +1,15 @@
+---
+# Handlers for Prometheus Node Exporter (Docker)
+
+- name: restart node_exporter
+  community.docker.docker_compose_v2:
+    project_src: /opt/node-exporter
+    services:
+      - node-exporter
+    state: restarted
+  ignore_errors: true
+  register: restart_result
+
+- name: restart node_exporter (fallback)
+  ansible.builtin.command: docker compose -f /opt/node-exporter/docker-compose.yml restart node-exporter
+  when: restart_result is failed

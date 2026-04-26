@@ -1,0 +1,5 @@
+---
+# Post wrapper (kept for compatibility)
+
+- name: Configure and validate NVIDIA driver
+  ansible.builtin.include_tasks: post/main.yml

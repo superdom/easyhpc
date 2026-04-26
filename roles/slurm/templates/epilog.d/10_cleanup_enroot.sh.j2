@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+{% set use_pyxis = pyxis_enabled | default(false) | bool %}
+{% if use_pyxis %}
+{% set enroot_data_base = pyxis_enroot_data_base | default('/tmp/enroot-data') %}
+{% else %}
+{% set enroot_data_base = enroot_data_dir | default('/tmp/enroot') %}
+{% endif %}
+JOB_RUNTIME="{{ enroot_data_base }}/runtime/${SLURM_JOB_ID:-}"
+if [[ -n "${SLURM_JOB_ID:-}" && -d "${JOB_RUNTIME}" ]]; then
+  rm -rf "${JOB_RUNTIME}"
+  logger -s -t slurm-epilog "Cleaned Enroot runtime path ${JOB_RUNTIME}"
+fi
+
+exit 0

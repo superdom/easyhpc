@@ -1,0 +1,21 @@
+#!/bin/bash
+# EasyBuild environment helper (module-based install)
+
+# Ensure Lmod environment is available
+if [ -f /etc/profile.d/z00_lmod.sh ]; then
+  . /etc/profile.d/z00_lmod.sh
+fi
+
+# Make EasyBuild modulefiles discoverable
+module use {{ easybuild_modules_path }}
+
+# Tell EasyBuild where the cluster-wide config lives
+export EASYBUILD_CONFIGFILES={{ easybuild_config_file }}
+
+{% if easybuild_autoload_module %}
+# Auto-load EasyBuild module
+module load EasyBuild
+{% else %}
+# Load EasyBuild manually when needed:
+#   module load EasyBuild
+{% endif %}

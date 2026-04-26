@@ -1,0 +1,49 @@
+---
+# Docker Compose setup and management tasks
+
+- name: Create monitoring base directory
+  ansible.builtin.file:
+    path: /opt/monitoring
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy Docker Compose file for monitoring
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/monitoring/docker-compose.yml
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Check if Docker Compose v2 is available
+  ansible.builtin.command: docker compose version
+  register: docker_compose_check
+  changed_when: false
+  failed_when: false
+
+- name: Display Docker Compose status
+  ansible.builtin.debug:
+    msg: "Docker Compose: {{ 'Available' if docker_compose_check.rc == 0 else 'Not Available (will use fallback)' }}"
+
+- name: Determine recreate strategy
+  ansible.builtin.set_fact:
+    recreate_strategy: "{{ 'always' if ((prometheus_needs_reinstall | default(false) | bool) or (grafana_needs_reinstall | default(false) | bool)) else 'never' }}"
+
+- name: Start monitoring services with Docker Compose
+  block:
+    - name: Start monitoring services with Docker Compose v2
+      community.docker.docker_compose_v2:
+        project_src: /opt/monitoring
+        state: present
+        pull: always
+        recreate: "{{ recreate_strategy }}"
+      register: docker_compose_result
+      changed_when: docker_compose_result.changed
+  rescue:
+    - name: Start monitoring services with Docker Compose (fallback)
+      ansible.builtin.command: docker compose -f /opt/monitoring/docker-compose.yml up -d
+      args:
+        chdir: /opt/monitoring
+      register: docker_compose_fallback
+      changed_when: "'Creating' in docker_compose_fallback.stdout or 'Starting' in docker_compose_fallback.stdout"

@@ -1,0 +1,24 @@
+---
+- name: "Check that spank_pyxis.so exists"
+  ansible.builtin.stat:
+    path: "{{ pyxis_spank_module_path }}/spank_pyxis.so"
+  register: pyxis_spank_stat
+
+- name: "Fail if spank_pyxis.so is missing"
+  ansible.builtin.fail:
+    msg: "Pyxis SPANK plugin (spank_pyxis.so) not found in {{ pyxis_spank_module_path }}"
+  when: not pyxis_spank_stat.stat.exists
+
+- name: "Check that srun exposes --container-image option"
+  ansible.builtin.command: "srun --help"
+  register: srun_help
+  changed_when: false
+  failed_when: false
+
+- name: "Warn if --container-image is not in srun help (Pyxis may not be loaded)"
+  ansible.builtin.debug:
+    msg: "WARNING: --container-image not found in 'srun --help' output. Check Slurm plugstack configuration."
+  when: 
+    - srun_help.rc == 0
+    - "'--container-image' not in srun_help.stdout"
+

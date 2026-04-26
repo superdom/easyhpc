@@ -1,0 +1,162 @@
+---
+# Slurm MySQL Database Role Tasks
+# System package installation
+
+- name: Install MariaDB/MySQL server packages (Debian)
+  ansible.builtin.apt:
+    name:
+      - "{{ mysql_package_name | default('mariadb-server') }}"
+      - "{{ mysql_client_package_name_debian | default(mysql_client_package_name | default('mariadb-client')) }}"
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == "Debian"
+
+- name: Install MariaDB/MySQL server packages (RedHat)
+  ansible.builtin.yum:
+    name:
+      - "{{ mysql_package_name | default('mariadb-server') }}"
+      - "{{ mysql_client_package_name_redhat | default(mysql_client_package_name | default('mariadb')) }}"
+    state: present
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install Python MySQL module (PyMySQL) via system package (Debian)
+  ansible.builtin.apt:
+    name: python3-pymysql
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == "Debian"
+
+- name: Install pip for Python 3 (RedHat)
+  ansible.builtin.yum:
+    name: python3-pip
+    state: present
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Install Python MySQL module (PyMySQL) via pip (RedHat)
+  ansible.builtin.pip:
+    name: PyMySQL
+    state: present
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+  when: ansible_facts['os_family'] == "RedHat"
+
+- name: Check if MariaDB/MySQL service is running
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name | default('mariadb') }}"
+  register: mysql_service_status
+  changed_when: false
+
+- name: Ensure MariaDB/MySQL service is started and enabled
+  ansible.builtin.systemd:
+    name: "{{ mysql_service_name | default('mariadb') }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: mysql_service_status.status.ActiveState | default('inactive') != 'active'
+
+- name: Wait for MySQL to be ready
+  ansible.builtin.wait_for:
+    port: "{{ mysql_port }}"
+    host: "127.0.0.1"
+    delay: 5
+    timeout: 60
+  register: mysql_ready
+  until: mysql_ready is succeeded
+  retries: 12
+  delay: 5
+
+- name: Check if MySQL root password is already set
+  ansible.builtin.command: >
+    mysql -u root
+    -e "SELECT 1"
+    --socket={{ mysql_socket if (mysql_socket is defined and mysql_socket|length > 0) else (mysql_socket_debian if ansible_facts['os_family'] == "Debian" else mysql_socket_redhat) }}
+  register: mysql_root_check
+  changed_when: false
+  failed_when: false
+
+- name: Set MySQL root password (if not already set)
+  community.mysql.mysql_user:
+    name: root
+    password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket if (mysql_socket is defined and mysql_socket|length > 0) else (mysql_socket_debian if ansible_facts['os_family'] == 'Debian' else mysql_socket_redhat) }}"
+    check_implicit_admin: yes
+  when:
+    - mysql_root_password is defined
+    - mysql_root_check.rc != 0
+  no_log: true
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+- name: Create Slurm database
+  community.mysql.mysql_db:
+    name: "{{ mysql_database }}"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket if (mysql_socket is defined and mysql_socket|length > 0) else (mysql_socket_debian if ansible_facts['os_family'] == 'Debian' else mysql_socket_redhat) }}"
+  no_log: true
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+- name: Create Slurm database user
+  community.mysql.mysql_user:
+    name: "{{ mysql_user }}"
+    password: "{{ mysql_password }}"
+    priv: "{{ mysql_database }}.*:ALL"
+    state: present
+    login_user: root
+    login_password: "{{ mysql_root_password }}"
+    login_unix_socket: "{{ mysql_socket if (mysql_socket is defined and mysql_socket|length > 0) else (mysql_socket_debian if ansible_facts['os_family'] == 'Debian' else mysql_socket_redhat) }}"
+  no_log: true
+  vars:
+    ansible_python_interpreter: "/usr/bin/python3"
+
+- name: Configure MySQL InnoDB settings for Slurm (Debian)
+  ansible.builtin.blockinfile:
+    path: /etc/mysql/mariadb.conf.d/99-slurm.cnf
+    block: |
+      [mysqld]
+      innodb_buffer_pool_size = 1G
+      innodb_log_file_size = 256M
+      innodb_lock_wait_timeout = 900
+      max_allowed_packet = 16M
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Slurm InnoDB settings"
+    create: true
+  when: ansible_facts['os_family'] == "Debian"
+  notify: restart mysql service
+
+- name: Configure MySQL InnoDB settings for Slurm (RedHat)
+  ansible.builtin.blockinfile:
+    path: /etc/my.cnf.d/slurm.cnf
+    block: |
+      [mysqld]
+      innodb_buffer_pool_size = 1G
+      innodb_log_file_size = 256M
+      innodb_lock_wait_timeout = 900
+      max_allowed_packet = 16M
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Slurm InnoDB settings"
+    create: true
+  when: ansible_facts['os_family'] == "RedHat"
+  notify: restart mysql service
+
+- name: Verify MySQL connection with Slurm user
+  ansible.builtin.command: >
+    mysql -h 127.0.0.1
+    -u {{ mysql_user }} -p{{ mysql_password }}
+    -e "SELECT 1" {{ mysql_database }}
+  register: mysql_test
+  changed_when: false
+  until: mysql_test.rc == 0
+  retries: 5
+  delay: 3
+  no_log: true
+
+- name: Display MySQL status
+  ansible.builtin.debug:
+    msg:
+      - "MySQL service: {{ mysql_service_name | default('mariadb') }}"
+      - "MySQL port: {{ mysql_port }}"
+      - "MySQL database: {{ mysql_database }}"
+      - "MySQL user: {{ mysql_user }}"
+      - "Connection test: {{ 'SUCCESS' if mysql_test.rc == 0 else 'FAILED' }}"
+  when: mysql_test is defined

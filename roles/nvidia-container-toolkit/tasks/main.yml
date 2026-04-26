@@ -1,0 +1,194 @@
+---
+# NVIDIA Container Toolkit Role (consolidated)
+
+- name: Preflight (validate, detect GPU, prerequisites)
+  block:
+    - name: Validate supported OS
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Ubuntu' and ansible_facts['distribution_version'] in ['22.04', '24.04'] or
+            (ansible_facts['distribution'] in ['RedHat', 'Rocky'] and ansible_facts['distribution_major_version'] == '9')
+        fail_msg: "Unsupported OS: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+        success_msg: "OS validation passed: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+
+    # Reuse GPU detection from nvidia-driver role if already set
+    - name: Reuse GPU detection fact from nvidia-driver role
+      ansible.builtin.set_fact:
+        nvidia_gpu_detected: "{{ nvidia_gpu_detected }}"
+        nvidia_gpu_detection_source: "nvidia-driver role (cached)"
+      when: nvidia_gpu_detected is defined
+
+    # Only detect GPU if not already set by nvidia-driver role
+    - name: Detect NVIDIA GPU via sysfs
+      ansible.builtin.shell: |
+        for dev in /sys/bus/pci/devices/*; do
+          [ -f "$dev/vendor" ] || continue
+          if grep -q 0x10de "$dev/vendor"; then
+            if [ -f "$dev/class" ] && grep -q '^0x03' "$dev/class"; then
+              exit 0
+            fi
+          fi
+        done
+        exit 1
+      register: nvidia_gpu_sysfs
+      changed_when: false
+      failed_when: false
+      when: nvidia_gpu_detected is not defined
+
+    - name: Set GPU detection fact from sysfs scan
+      ansible.builtin.set_fact:
+        nvidia_gpu_detected: "{{ nvidia_gpu_sysfs.rc == 0 }}"
+        nvidia_gpu_detection_source: "sysfs scan"
+      when: nvidia_gpu_detected is not defined
+
+    - name: Display GPU detection source
+      ansible.builtin.debug:
+        msg: "GPU detected: {{ nvidia_gpu_detected }} (source: {{ nvidia_gpu_detection_source | default('unknown') }})"
+
+    - name: Fail if GPU is required but not detected
+      ansible.builtin.fail:
+        msg: "No NVIDIA GPU detected, but nvidia_container_toolkit_require_gpu is true and skip_if_no_gpu is false."
+      when:
+        - not nvidia_gpu_detected
+        - nvidia_container_toolkit_require_gpu | default(false)
+        - not nvidia_container_toolkit_skip_if_no_gpu
+
+    - name: Skip NVIDIA Container Toolkit when no GPU is present
+      ansible.builtin.debug:
+        msg: "Skipping NVIDIA Container Toolkit: no NVIDIA GPU detected."
+      when:
+        - not nvidia_gpu_detected
+        - nvidia_container_toolkit_skip_if_no_gpu
+
+    - name: End NVIDIA Container Toolkit role when no GPU is present
+      ansible.builtin.meta: end_role
+      when:
+        - not nvidia_gpu_detected
+        - nvidia_container_toolkit_skip_if_no_gpu
+
+    - name: Install prerequisites (Ubuntu)
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+      when: ansible_facts['distribution'] == 'Ubuntu'
+
+- name: Install NVIDIA Container Toolkit
+  block:
+    - name: Warn if NVIDIA Container Toolkit version is not pinned
+      ansible.builtin.debug:
+        msg: "Toolkit version is not pinned (package_state=latest). Set nvidia_container_toolkit_version for reproducible installs."
+      when:
+        - nvidia_container_toolkit_version | length == 0
+        - nvidia_container_toolkit_package_state == 'latest'
+
+    - name: Add NVIDIA Container Toolkit repository (Ubuntu)
+      block:
+        - name: Download NVIDIA Container Toolkit GPG key
+          ansible.builtin.get_url:
+            url: "{{ nvidia_container_toolkit_gpgkey_url }}"
+            dest: /usr/share/keyrings/nvidia-container-toolkit-keyring.asc
+            mode: '0644'
+
+        - name: Dearmor NVIDIA Container Toolkit keyring
+          ansible.builtin.command: >-
+            gpg --dearmor -o {{ nvidia_container_toolkit_gpgkey_path }}
+            /usr/share/keyrings/nvidia-container-toolkit-keyring.asc
+          args:
+            creates: "{{ nvidia_container_toolkit_gpgkey_path }}"
+
+        - name: Download NVIDIA Container Toolkit apt list
+          ansible.builtin.get_url:
+            url: "{{ nvidia_container_toolkit_repo_list_url }}"
+            dest: "{{ nvidia_container_toolkit_repo_list_path }}"
+            mode: '0644'
+
+        - name: Ensure apt list uses signed-by
+          ansible.builtin.replace:
+            path: "{{ nvidia_container_toolkit_repo_list_path }}"
+            regexp: '^deb https://'
+            replace: "deb [signed-by={{ nvidia_container_toolkit_gpgkey_path }}] https://"
+
+        - name: Update apt cache
+          ansible.builtin.apt:
+            update_cache: true
+      when: ansible_facts['distribution'] == 'Ubuntu'
+
+    - name: Add NVIDIA Container Toolkit repository (RHEL/Rocky)
+      block:
+        - name: Download NVIDIA Container Toolkit repo file
+          ansible.builtin.get_url:
+            url: "{{ nvidia_container_toolkit_repo_rpm_url }}"
+            dest: /etc/yum.repos.d/nvidia-container-toolkit.repo
+            mode: '0644'
+
+        - name: Update dnf cache
+          ansible.builtin.dnf:
+            update_cache: true
+      when: ansible_facts['os_family'] == 'RedHat'
+
+    - name: Install NVIDIA Container Toolkit (Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ 'nvidia-container-toolkit=' ~ nvidia_container_toolkit_version if nvidia_container_toolkit_version | length > 0 else 'nvidia-container-toolkit' }}"
+        state: "{{ nvidia_container_toolkit_package_state }}"
+      when: ansible_facts['distribution'] == 'Ubuntu'
+
+    - name: Install NVIDIA Container Toolkit (RHEL/Rocky)
+      ansible.builtin.dnf:
+        name: "{{ 'nvidia-container-toolkit-' ~ nvidia_container_toolkit_version if nvidia_container_toolkit_version | length > 0 else 'nvidia-container-toolkit' }}"
+        state: "{{ nvidia_container_toolkit_package_state }}"
+      when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Configure runtime integration
+  block:
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Read Docker daemon.json (if present)
+      ansible.builtin.slurp:
+        path: /etc/docker/daemon.json
+      register: nvidia_docker_daemon_json
+      failed_when: false
+      changed_when: false
+
+    - name: Detect NVIDIA runtime in Docker config
+      ansible.builtin.set_fact:
+        nvidia_docker_runtime_configured: >-
+          {{
+            (nvidia_docker_daemon_json.content | default('') | b64decode) is search('nvidia-container-runtime')
+            or (nvidia_docker_daemon_json.content | default('') | b64decode) is search('\"nvidia\"')
+          }}
+
+    - name: Configure NVIDIA runtime for Docker
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+      when:
+        - nvidia_container_toolkit_configure_docker
+        - ansible_facts.services['docker.service'] is defined
+        - not nvidia_docker_runtime_configured | default(false)
+      notify: Restart Docker service for NVIDIA runtime
+
+    - name: Read containerd config (if present)
+      ansible.builtin.slurp:
+        path: /etc/containerd/config.toml
+      register: nvidia_containerd_config
+      failed_when: false
+      changed_when: false
+
+    - name: Detect NVIDIA runtime in containerd config
+      ansible.builtin.set_fact:
+        nvidia_containerd_runtime_configured: >-
+          {{
+            (nvidia_containerd_config.content | default('') | b64decode) is search('nvidia-container-runtime')
+            or (nvidia_containerd_config.content | default('') | b64decode) is search('nvidia')
+          }}
+
+    - name: Configure NVIDIA runtime for containerd
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=containerd
+      when:
+        - nvidia_container_toolkit_configure_containerd
+        - ansible_facts.services['containerd.service'] is defined
+        - not nvidia_containerd_runtime_configured | default(false)
+      notify: Restart containerd service for NVIDIA runtime

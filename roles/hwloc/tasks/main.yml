@@ -1,0 +1,90 @@
+---
+# HWLOC Role - Source build and install
+
+- name: Verify installed hwloc version
+  ansible.builtin.command: "{{ hwloc_install_prefix }}/bin/hwloc-info --version"
+  register: hwloc_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Determine if hwloc build is required
+  ansible.builtin.set_fact:
+    hwloc_needs_build: >-
+      {{ (hwloc_force_rebuild | default(false) | bool)
+         or (hwloc_version_check.rc != 0)
+         or ((hwloc_version_check.stdout | trim) != hwloc_version) }}
+
+- name: Install hwloc build dependencies
+  ansible.builtin.package:
+    name: "{{ hwloc_build_dependencies[ansible_facts['os_family']] }}"
+    state: present
+  when: hwloc_needs_build
+
+- name: Create hwloc build directory
+  ansible.builtin.file:
+    path: "{{ hwloc_build_dir }}"
+    state: directory
+    mode: "0755"
+  when: hwloc_needs_build
+
+- name: Remove existing hwloc source directory
+  ansible.builtin.file:
+    path: "{{ hwloc_source_dir }}"
+    state: absent
+  when: hwloc_needs_build
+
+- name: Download hwloc source archive
+  ansible.builtin.get_url:
+    url: "{{ hwloc_source_url }}"
+    dest: "{{ hwloc_build_dir }}/hwloc-{{ hwloc_version }}.tar.gz"
+    mode: "0644"
+  when: hwloc_needs_build
+
+- name: Extract hwloc source archive
+  ansible.builtin.unarchive:
+    src: "{{ hwloc_build_dir }}/hwloc-{{ hwloc_version }}.tar.gz"
+    dest: "{{ hwloc_build_dir }}"
+    remote_src: true
+  when: hwloc_needs_build
+
+- name: Configure hwloc build options
+  ansible.builtin.command: "{{ hwloc_configure_options }}"
+  args:
+    chdir: "{{ hwloc_source_dir }}"
+    creates: "{{ hwloc_source_dir }}/Makefile"
+  when: hwloc_needs_build
+
+- name: Build hwloc from source
+  ansible.builtin.make:
+    chdir: "{{ hwloc_source_dir }}"
+    target: all
+    params:
+      MAKEFLAGS: "-j{{ hwloc_make_jobs | default(ansible_facts[\"processor_vcpus\"] | default(4)) }}"
+  when: hwloc_needs_build
+
+- name: Install hwloc binaries and libraries
+  ansible.builtin.make:
+    chdir: "{{ hwloc_source_dir }}"
+    target: install
+  when: hwloc_needs_build
+
+- name: Deploy hwloc ldconfig configuration
+  ansible.builtin.copy:
+    dest: /etc/ld.so.conf.d/hwloc.conf
+    content: |
+      {{ hwloc_install_prefix }}/lib
+      {{ hwloc_install_prefix }}/lib64
+    mode: "0644"
+  register: hwloc_ldconfig
+
+- name: Refresh ldconfig cache for hwloc libraries
+  ansible.builtin.command: ldconfig
+  when: hwloc_ldconfig.changed
+
+- name: Clean up hwloc build directory
+  ansible.builtin.file:
+    path: "{{ hwloc_build_dir }}"
+    state: absent
+  when:
+    - hwloc_needs_build
+    - hwloc_build_cleanup | default(true) | bool

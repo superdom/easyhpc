@@ -33,6 +33,7 @@
   when: "'dbd' in node_roles or 'controller' in node_roles"
 
 - name: reload slurm
-  ansible.builtin.command: "{{ slurm_install_prefix }}/bin/scontrol reconfigure"
-  changed_when: false
+  ansible.builtin.systemd:
+    name: slurmctld
+    state: reloaded
   when: "'controller' in node_roles"

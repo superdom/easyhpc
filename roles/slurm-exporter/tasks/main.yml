@@ -1,0 +1,140 @@
+---
+# slurm-exporter role: pip-installed Python exporter, systemd-managed.
+# Runs only on slurm-controller hosts.
+
+- name: Verify this is a controller node
+  ansible.builtin.fail:
+    msg: "This role should only run on nodes in the 'slurm-controller' group"
+  when: not (is_slurm_controller | default(false))
+
+- name: Validate exporter prerequisite policy
+  ansible.builtin.assert:
+    that:
+      - slurm_exporter_prereq_policy in ['skip', 'fail']
+    fail_msg: "Invalid slurm_exporter_prereq_policy='{{ slurm_exporter_prereq_policy }}'. Use 'skip' or 'fail'."
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Determine Slurm prerequisite status
+  ansible.builtin.set_fact:
+    slurm_exporter_slurmctld_service_exists: "{{ slurm_exporter_required_slurmctld_service in (ansible_facts.services | default({})) }}"
+
+- name: Build Slurm prerequisite result
+  ansible.builtin.set_fact:
+    slurm_exporter_prereq_ok: "{{ slurm_exporter_slurmctld_service_exists }}"
+    slurm_exporter_prereq_missing: >-
+      {{
+        (not slurm_exporter_slurmctld_service_exists)
+        | ternary(['service not found: ' ~ slurm_exporter_required_slurmctld_service], [])
+      }}
+
+- name: Fail when Slurm prerequisites are missing
+  ansible.builtin.fail:
+    msg: "Cannot install slurm-exporter. Missing prerequisites: {{ slurm_exporter_prereq_missing | join('; ') }}"
+  when:
+    - not slurm_exporter_prereq_ok
+    - slurm_exporter_prereq_policy == 'fail'
+
+- name: Skip exporter installation when Slurm prerequisites are missing
+  ansible.builtin.debug:
+    msg: "Skipping slurm-exporter: {{ slurm_exporter_prereq_missing | join('; ') }}"
+  when:
+    - not slurm_exporter_prereq_ok
+    - slurm_exporter_prereq_policy == 'skip'
+
+- name: Install and start slurm-exporter
+  when: slurm_exporter_prereq_ok
+  block:
+    - name: Install Python and git (Debian)
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+          - git
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Install Python and git (RedHat)
+      ansible.builtin.yum:
+        name:
+          - python3
+          - python3-pip
+          - git
+        state: present
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Create install directory
+      ansible.builtin.file:
+        path: "{{ slurm_exporter_install_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create Python virtualenv
+      ansible.builtin.command:
+        cmd: "python3 -m venv {{ slurm_exporter_venv_dir }}"
+        creates: "{{ slurm_exporter_venv_dir }}/bin/python"
+
+    - name: Upgrade pip in virtualenv
+      ansible.builtin.command:
+        cmd: "{{ slurm_exporter_venv_dir }}/bin/pip install --upgrade pip"
+      changed_when: false
+
+    - name: Check current installed slurm-exporter version
+      ansible.builtin.command:
+        cmd: "{{ slurm_exporter_venv_dir }}/bin/pip show slurm-exporter"
+      register: slurm_exporter_pip_show
+      failed_when: false
+      changed_when: false
+
+    - name: Install slurm-exporter from GitHub release tag
+      ansible.builtin.pip:
+        name: "git+{{ slurm_exporter_git_url }}@v{{ slurm_exporter_version }}"
+        state: present
+        virtualenv: "{{ slurm_exporter_venv_dir }}"
+      when: "('Version: ' ~ slurm_exporter_version) not in (slurm_exporter_pip_show.stdout | default(''))"
+      notify: restart slurm_exporter
+
+    - name: Install systemd unit
+      ansible.builtin.template:
+        src: slurm-exporter.service.j2
+        dest: "/etc/systemd/system/{{ slurm_exporter_service_name }}.service"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart slurm_exporter
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start slurm-exporter
+      ansible.builtin.systemd:
+        name: "{{ slurm_exporter_service_name }}"
+        state: started
+        enabled: true
+
+    - name: Wait for slurm-exporter to listen
+      ansible.builtin.wait_for:
+        port: "{{ slurm_exporter_port }}"
+        host: localhost
+        delay: 3
+        timeout: 30
+      ignore_errors: true
+
+    - name: Verify slurm-exporter /metrics endpoint
+      ansible.builtin.uri:
+        url: "http://localhost:{{ slurm_exporter_port }}/metrics"
+        status_code: 200
+      register: slurm_exporter_check
+      changed_when: false
+      failed_when: false
+
+    - name: Display slurm-exporter status
+      ansible.builtin.debug:
+        msg: "slurm-exporter: {{ 'Running' if slurm_exporter_check.status == 200 else 'Not Running' }}"

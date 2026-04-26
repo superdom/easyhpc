@@ -52,7 +52,7 @@ alloy_config_dir: "/etc/alloy"
 # Exporter versions and ports (defaults in roles/monitoring/defaults/main.yml)
 node_exporter_version: "v1.10.2"
 node_exporter_port: 9100
-slurm_exporter_port: 8080
+slurm_exporter_port: 9410
 dcgm_exporter_port: 9400
 
 # Alertmanager configuration (defaults in roles/monitoring/defaults/main.yml)

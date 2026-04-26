@@ -1,0 +1,28 @@
+---
+# slurm-exporter (https://github.com/superdom/slurm-exporter)
+
+# Source pin: GitHub release tag, kept in sync with pyproject.toml version
+slurm_exporter_git_url: "https://github.com/superdom/slurm-exporter.git"
+slurm_exporter_version: "0.1.0"
+
+# Install layout (isolated venv, no system Python pollution)
+slurm_exporter_install_dir: "/opt/slurm-exporter"
+slurm_exporter_venv_dir: "{{ slurm_exporter_install_dir }}/venv"
+slurm_exporter_bin: "{{ slurm_exporter_venv_dir }}/bin/slurm-exporter"
+
+# Service identity
+slurm_exporter_service_name: "slurm-exporter"
+slurm_exporter_run_user: "{{ slurm_user.name }}"
+slurm_exporter_run_group: "{{ slurm_user.group }}"
+
+# Behavior when Slurm prerequisites are missing. Valid values: "skip", "fail"
+slurm_exporter_prereq_policy: "skip"
+slurm_exporter_required_slurmctld_service: "slurmctld.service"
+
+# Runtime flags
+slurm_exporter_log_level: "info"
+slurm_exporter_collect_interval: 15
+slurm_exporter_medium_interval: 300
+
+# Extra CLI flags appended to ExecStart (e.g. --disable-diags, --gpus-per-node=8)
+slurm_exporter_extra_args: []

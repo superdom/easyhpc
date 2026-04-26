@@ -31,5 +31,5 @@ alertmanager_force_reinstall: false
 
 # Exporter ports
 node_exporter_port: 9100
-slurm_exporter_port: 8080
+slurm_exporter_port: 9410
 dcgm_exporter_port: 9445

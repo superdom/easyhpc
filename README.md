@@ -39,7 +39,7 @@ Ansible playbooks to deploy a SLURM cluster (controller, compute, optional login
   - Common baseline: `--tags common`
   - Slurm core stack: `--tags ha-slurm,slurm-mysql,hwloc,pmix,slurm`
   - GPU + containers: `--tags nvidia-driver,docker,nvidia-container-toolkit,enroot,pyxis`
-  - Observability (monitoring + exporters + logging): `--tags monitoring,alertmanager,prometheus-node-exporter,prometheus-slurm-exporter,nvidia-dcgm-exporter,loki,alloy`
+  - Observability (monitoring + exporters + logging): `--tags monitoring,alertmanager,prometheus-node-exporter,slurm-exporter,nvidia-dcgm-exporter,loki,alloy`
   - EasyBuild: `--tags lmod,easybuild`
 
 ## Validate

@@ -134,11 +134,11 @@
       tags: prometheus-node-exporter
 
     # SLURM Exporter: Only on controller node
-    - role: prometheus-slurm-exporter
+    - role: slurm-exporter
       when:
         - monitoring_enabled | bool
         - is_slurm_controller | default(false)
-      tags: prometheus-slurm-exporter
+      tags: slurm-exporter
 
     # DCGM Exporter: Only on compute nodes (slurm-node) that have GPUs
     - role: nvidia-dcgm-exporter

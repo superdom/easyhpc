@@ -97,7 +97,7 @@ Note: If `[nfs-server]` exists and `nfs_enable_server: true`, EasyHPC configures
   `--tags ha-slurm,slurm-mysql,hwloc,pmix,slurm` (Slurm core stack)
   `--tags lmod,nhc,pyxis` (Slurm add-ons)
   `--tags nvidia-driver,docker,nvidia-container-toolkit,enroot,pyxis` (GPU + containers)  
-  `--tags monitoring,alertmanager,prometheus-node-exporter,prometheus-slurm-exporter,nvidia-dcgm-exporter,loki,alloy` (observability)  
+  `--tags monitoring,alertmanager,prometheus-node-exporter,slurm-exporter,nvidia-dcgm-exporter,loki,alloy` (observability)  
   `--tags lmod,easybuild` (EasyBuild)
 
 **Note**: Some components are intentionally gated in this repo:

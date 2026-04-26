@@ -1,0 +1,21 @@
+[Unit]
+Description=Prometheus SLURM Exporter
+After=slurmctld.service munge.service network.target
+Wants=slurmctld.service
+
+[Service]
+Type=simple
+User={{ slurm_exporter_run_user }}
+Group={{ slurm_exporter_run_group }}
+ExecStart={{ slurm_exporter_bin }} \
+    --port={{ slurm_exporter_port }} \
+    --log-level={{ slurm_exporter_log_level }} \
+    --collect-interval={{ slurm_exporter_collect_interval }} \
+    --medium-interval={{ slurm_exporter_medium_interval }}{% for a in slurm_exporter_extra_args %} \
+    {{ a }}{% endfor %}
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

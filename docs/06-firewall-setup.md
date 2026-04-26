@@ -33,7 +33,7 @@ Open only what you use. If a phase is disabled, close the related ports.
 | Grafana | 3000 | TCP | Dashboards |
 | Loki | 3100 | TCP | Log store |
 | Node Exporter | 9100 | TCP | Node metrics |
-| Slurm Exporter | 8080 | TCP | Slurm metrics |
+| Slurm Exporter | 9410 | TCP | Slurm metrics |
 | DCGM Exporter | 9400 | TCP | GPU metrics |
 | Alertmanager | 9093 | TCP | Alert routing |
 | Alloy | 12345 | TCP | Log agent (localhost-only by default) |
@@ -44,7 +44,7 @@ Open only what you use. If a phase is disabled, close the related ports.
 **Controller nodes**
 - Open: 22/TCP, 6817/TCP
 - If accounting enabled: 6819/TCP (slurmdbd), 3306/TCP (DB host)
-- If monitoring enabled: 8080/TCP
+- If monitoring enabled: 9410/TCP
 
 **Compute nodes**
 - Open: 22/TCP, 6818/TCP

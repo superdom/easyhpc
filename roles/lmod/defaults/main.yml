@@ -10,7 +10,7 @@ lmod_install_base: "{{ lmod_install_prefix }}/lmod"
 lmod_home: "{{ lmod_install_base }}/lmod/lmod"
 
 # Default Lmod version; override in inventory/group vars as needed
-lmod_version: "8.7.67"
+lmod_version: "9.0.4"
 
 # Module tree paths
 lmod_modules_root: "{{ modules_root | default((modules_base_path | default('/data/apps')) ~ '/modules') }}"

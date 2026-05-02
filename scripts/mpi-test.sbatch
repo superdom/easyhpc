@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-moduel purge
+module purge
 module load NVHPC/25.3-CUDA-12.8.0
 
 cat > mpi_hello.c <<'EOF'

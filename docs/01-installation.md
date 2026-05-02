@@ -160,6 +160,35 @@ ldap_home_prefix: "{{ shared_storage_mount }}/users"
 - If you do not want EasyHPC to create directories on shared storage, set
   `modules_manage_shared_paths: false` and create the structure manually.
 
+### NFS export security
+- Wildcard `*` is removed from `/etc/exports`; exports are rendered from
+  inventory hosts only.
+- `[slurm-controller]` and `[easybuild]` are exported with `no_root_squash`;
+  every other host in `[nfs-client]` is exported with `root_squash`.
+- Login nodes are intentionally not trusted; do not run root tasks against
+  shared paths from a login shell.
+- `root_squash` blocks `chown`/`chmod` only — it does not block read of
+  world-readable files. Pair with `umask 027`, home `0700`, and group ACLs
+  for project directories.
+- Pre-create LDAP user home directories on the NFS server; `pam_mkhomedir`
+  fails on `root_squash` clients (see `docs/05-ldap.md`).
+
+`nfs_exports` accepts a structured form (default) or a raw `options` string
+that renders verbatim — use the latter for CIDR or path-level splits:
+```yaml
+# raw override
+nfs_exports:
+  - path: /data
+    options: "10.0.0.0/24(rw,sync,no_root_squash,no_subtree_check)"
+```
+
+Verify before deploy:
+```bash
+ansible -i config/inventory nfs-server -m debug -a "var=nfs_exports"
+ansible-playbook -i config/inventory playbooks/slurm-cluster.yml \
+  --tags nfs-server --check --diff
+```
+
 ---
 ## Phase 4: Slurm Stack
 

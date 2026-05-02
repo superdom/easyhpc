@@ -4,6 +4,7 @@
 # NFS Configuration
 nfs_mount_root: "{{ shared_storage_mount | default('/data') }}"
 
-nfs_exports:
-  - path: "{{ nfs_mount_root }}"
-    options: "*(rw,sync,no_root_squash)"
+# Role-level default is intentionally empty so the role itself ships no
+# permissive export. The cluster-level default lives in
+# config/group_vars/all.yml (see docs/01-installation.md, Phase 3).
+nfs_exports: []

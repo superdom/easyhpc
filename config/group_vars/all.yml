@@ -48,6 +48,30 @@ modules_manage_shared_paths: true
 nfs_enable_server: true
 nfs_enable_client: true
 
+# NFS export client classification (inventory-group based).
+# - trusted clients are exported with no_root_squash (services that need
+#   to manage shared paths as root: controllers, easybuild build host).
+# - every other host in [nfs-client] is exported with root_squash.
+# Login nodes are intentionally NOT trusted by default; do not run root
+# tasks against shared paths from a login node.
+# See docs/01-installation.md (Phase 3) for details and override patterns.
+nfs_trusted_root_clients: >-
+  {{
+    (groups['slurm-controller'] | default([]))
+    + (groups['easybuild'] | default([]))
+  }}
+nfs_root_squash_clients: >-
+  {{
+    (groups['nfs-client'] | default([]))
+    | reject('in', nfs_trusted_root_clients)
+    | list
+  }}
+
+nfs_exports:
+  - path: "{{ shared_storage_mount }}"
+    trusted_clients: "{{ nfs_trusted_root_clients }}"
+    root_squash_clients: "{{ nfs_root_squash_clients }}"
+
 # Node group helpers (inventory-derived)
 is_slurm_node: "{{ 'slurm-controller' in group_names or 'slurm-node' in group_names or 'slurm-login' in group_names }}"
 is_slurm_controller: "{{ 'slurm-controller' in group_names }}"

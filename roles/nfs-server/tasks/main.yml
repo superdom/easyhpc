@@ -15,6 +15,17 @@
     update_cache: true
   when: ansible_facts["os_family"] == "Debian"
 
+- name: Assert NFS exports are configured when NFS server is enabled
+  ansible.builtin.assert:
+    that:
+      - (nfs_exports | default([])) | length > 0
+    fail_msg: >-
+      nfs_enable_server is true but nfs_exports is empty.
+      Define nfs_exports in config/group_vars/all.yml.
+      See docs/01-installation.md (Phase 3) for the supported formats.
+    success_msg: "nfs_exports has {{ (nfs_exports | default([])) | length }} entry/entries."
+  when: nfs_enable_server | default(false) | bool
+
 - name: Ensure NFS export directories exist
   ansible.builtin.file:
     path: "{{ item.path }}"

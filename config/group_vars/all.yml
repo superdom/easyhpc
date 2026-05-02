@@ -28,19 +28,13 @@ slurm_user:
 # Shared storage base
 shared_storage_mount: "/data"
 
-# Shared modules/software paths
-# - modules_base_path: root directory for all module-related files
-# - modules_root: alias for modules_base_path (for documentation consistency)
-# - modules_path: where Lmod module files are stored (used in MODULEPATH)
-# - modules_storage_path: where EasyBuild installs software
-# - modules_storage_host: host that manages shared module storage
+# Shared modules/software paths (Lmod + EasyBuild)
 modules_base_path: "{{ shared_storage_mount }}/apps"
 modules_root: "{{ modules_base_path }}"
 modules_path: "{{ modules_root }}/modules/all"
 modules_storage_path: "{{ modules_root }}"
 modules_storage_host: "{{ groups['easybuild'][0] | default(groups['slurm-controller'][0] | default('localhost')) }}"
 
-# Control whether EasyHPC creates directories on shared storage
 # Set to false if you manage shared paths externally
 modules_manage_shared_paths: true
 
@@ -48,13 +42,7 @@ modules_manage_shared_paths: true
 nfs_enable_server: true
 nfs_enable_client: true
 
-# NFS export client classification (inventory-group based).
-# - trusted clients are exported with no_root_squash (services that need
-#   to manage shared paths as root: controllers, easybuild build host).
-# - every other host in [nfs-client] is exported with root_squash.
-# Login nodes are intentionally NOT trusted by default; do not run root
-# tasks against shared paths from a login node.
-# See docs/01-installation.md (Phase 3) for details and override patterns.
+# NFS export client tiers (see docs/01-installation.md, Phase 3)
 nfs_trusted_root_clients: >-
   {{
     (groups['slurm-controller'] | default([]))

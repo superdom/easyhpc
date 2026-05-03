@@ -73,7 +73,7 @@ grafana_admin_user: "admin"
 grafana_admin_password: "admin"
 grafana_force_reinstall: false
 grafana_node_exporter_dashboard_id: 1860
-grafana_slurm_dashboard_id: 19835
+grafana_slurm_dashboard_id: 25249
 grafana_dashboard_revision: "latest"
 
 # Loki URL for Grafana datasource

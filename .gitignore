@@ -1,27 +1,7 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-*.egg-info/
-dist/
-build/
-
 # Ansible
 *.retry
 .ansible/
 *.cache
-*.log
-
-# Backup files
-*.bak
-*.swp
-*~
-.DS_Store
 
 # Credentials
 *.pem
@@ -29,46 +9,25 @@ build/
 secrets/
 credentials.yml
 
-# IDE
-.vscode/
-.idea/
-*.sublime-*
-
-# Logs
-*.log
-logs/
-
-# Temp files
-*.tmp
-*.temp
-/tmp/
-
-# Vagrant
-.vagrant/
-Vagrantfile.local
-
-# Environment
-.env
-.env.local
-
-# Backup directories
-backup/
-*.tar.gz
-
-# Test files
-.pytest_cache/
-.coverage
-htmlcov/
-
-# OS files
-.DS_Store
-Thumbs.db
-
 # Ansible Vault
 vault_pass.txt
 *.vault
 
-# SLURM backup files
-/backup/
-backup_*.tar.gz
+# Temp files
+*.tmp
+*.temp
 
+# Editor / OS
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.sublime-*
+
+# Python venv (used by setup-ansible-env.sh)
+env/
+venv/
+ENV/

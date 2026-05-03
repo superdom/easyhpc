@@ -18,7 +18,7 @@ grafana_admin_password: "admin"
 grafana_force_reinstall: false
 grafana_data_dir: "/var/lib/grafana"
 grafana_node_exporter_dashboard_id: 1860
-grafana_slurm_dashboard_id: 19835
+grafana_slurm_dashboard_id: 25249
 grafana_gpu_nodes_dashboard_id: 24680
 grafana_syslog_dashboard_id: 24676
 grafana_slurm_log_dashboard_id: 24677

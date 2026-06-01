@@ -7,10 +7,12 @@ easyhpc-mgmt02 ansible_host=10.0.0.12
 # SLURM compute nodes
 easyhpc-cpu01 ansible_host=10.0.0.21
 easyhpc-cpu02 ansible_host=10.0.0.22
+easyhpc-gpu01 ansible_host=10.0.0.31 gpu_count=8
+easyhpc-gpu02 ansible_host=10.0.0.32 gpu_count=8
 
 [slurm-login]
 # SLURM login nodes
-easyhpc-login ansible_host=10.0.0.31
+easyhpc-login ansible_host=10.0.0.100
 
 [nfs-server]
 # NFS server

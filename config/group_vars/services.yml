@@ -54,6 +54,9 @@ node_exporter_version: "v1.10.2"
 node_exporter_port: 9100
 slurm_exporter_port: 9410
 dcgm_exporter_port: 9400
+# Image tag format is <DCGM>-<exporter>-ubuntu22.04; a plain "3.3.0" tag does not exist on nvcr.io.
+# DCGM 4.x is required for recent drivers (this cluster runs driver 580.x).
+dcgm_exporter_version: "4.5.2-4.8.1-ubuntu22.04"
 
 # Alertmanager configuration (defaults in roles/monitoring/defaults/main.yml)
 alertmanager_version: "v0.27.0"

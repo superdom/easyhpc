@@ -9,8 +9,6 @@
 
 - name: Check if NVIDIA GPU is present
   ansible.builtin.shell: lspci | grep -i nvidia
-  args:
-    warn: false
   register: nvidia_check
   changed_when: false
   failed_when: false

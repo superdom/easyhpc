@@ -1,3 +1,4 @@
+{% set docker_nvidia_runtime_enabled = (nvidia_gpu_detected | default(false)) or ((gpu_count | default(0) | int) > 0) %}
 {
   "log-driver": "{{ docker_log_driver }}",
   "storage-driver": "{{ docker_storage_driver }}",
@@ -7,5 +8,12 @@
       "base": "172.17.0.0/16",
       "size": 24
     }
-  ]
+  ]{% if docker_nvidia_runtime_enabled %},
+  "runtimes": {
+    "nvidia": {
+      "path": "nvidia-container-runtime",
+      "args": []
+    }
+  }{% endif %}
+
 }

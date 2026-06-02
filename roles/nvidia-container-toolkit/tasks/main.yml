@@ -192,3 +192,6 @@
         - ansible_facts.services['containerd.service'] is defined
         - not nvidia_containerd_runtime_configured | default(false)
       notify: Restart containerd service for NVIDIA runtime
+
+    - name: Flush handlers so the NVIDIA runtime is active right away
+      ansible.builtin.meta: flush_handlers

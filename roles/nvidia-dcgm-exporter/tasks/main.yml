@@ -52,6 +52,9 @@
   when: nvidia_driver_present
   notify: restart dcgm-exporter
 
+- name: Flush handlers so any pending Docker restart is applied before starting dcgm-exporter
+  ansible.builtin.meta: flush_handlers
+
 - name: Start dcgm-exporter with Docker Compose
   when: nvidia_driver_present
   block:

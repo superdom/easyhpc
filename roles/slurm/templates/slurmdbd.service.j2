@@ -7,15 +7,13 @@ Wants=munge.service
 
 [Service]
 Type=simple
-ExecStart={{ slurm_install_prefix }}/sbin/slurmdbd -D
+ExecStart={{ slurm_install_prefix }}/sbin/slurmdbd -D -s
 ExecReload=/bin/kill -HUP $MAINPID
-KillMode=process
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=300
 RuntimeDirectory=slurm
 RuntimeDirectoryMode=0755
-PIDFile=/run/slurm/slurmdbd.pid
 User={{ slurm_user.name }}
 Group={{ slurm_user.group }}
 

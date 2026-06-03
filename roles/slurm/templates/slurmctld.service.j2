@@ -6,15 +6,13 @@ ConditionPathExists=/etc/slurm/slurm.conf
 Wants=munge.service
 
 [Service]
-Type=forking
-ExecStart={{ slurm_install_prefix }}/sbin/slurmctld
+Type=notify
+ExecStart={{ slurm_install_prefix }}/sbin/slurmctld --systemd -s
 ExecReload=/bin/kill -HUP $MAINPID
-KillMode=process
 Restart=on-failure
 RestartSec=5s
 RuntimeDirectory=slurm
 RuntimeDirectoryMode=0755
-PIDFile=/run/slurm/slurmctld.pid
 User={{ slurm_user.name }}
 Group={{ slurm_user.group }}
 

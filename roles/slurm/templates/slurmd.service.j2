@@ -25,6 +25,10 @@ ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=on-failure
 RestartSec=5s
+LimitNOFILE=131072
+LimitMEMLOCK=infinity
+LimitSTACK=infinity
+TasksMax=infinity
 Delegate=yes
 Slice=system.slice
 

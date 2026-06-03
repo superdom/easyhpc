@@ -1,8 +1,8 @@
-{%- set targets = [] -%}
+{%- set entries = [] -%}
 {%- for host in groups['all'] | default([]) -%}
 {%- set host_node_exporter_enabled = hostvars[host].node_exporter_enabled | default(true) | bool -%}
 {%- if host_node_exporter_enabled -%}
-{%- set _ = targets.append((hostvars[host].ansible_host | default(host)) ~ ':' ~ node_exporter_port) -%}
+{%- set _ = entries.append({"targets": [(hostvars[host].ansible_host | default(host)) ~ ':' ~ node_exporter_port], "labels": {"instance": host}}) -%}
 {%- endif -%}
 {%- endfor -%}
-{{ [ {"targets": targets} ] | to_json }}
+{{ entries | to_json }}

@@ -1,9 +1,9 @@
-{%- set targets = [] -%}
+{%- set entries = [] -%}
 {%- for host in groups['slurm-node'] | default([]) -%}
 {%- set host_has_gpu = (hostvars[host].gpu_count | default(0) | int) > 0 -%}
-{%- set host_monitoring_enabled = hostvars[host].monitoring_enabled | default(false) | bool -%}
+{%- set host_monitoring_enabled = monitoring_enabled | default(true) | bool -%}
 {%- if host_has_gpu and host_monitoring_enabled -%}
-{%- set _ = targets.append((hostvars[host].ansible_host | default(host)) ~ ':' ~ dcgm_exporter_port) -%}
+{%- set _ = entries.append({"targets": [(hostvars[host].ansible_host | default(host)) ~ ':' ~ dcgm_exporter_port], "labels": {"instance": host}}) -%}
 {%- endif -%}
 {%- endfor -%}
-{{ [ {"targets": targets} ] | to_json }}
+{{ entries | to_json }}

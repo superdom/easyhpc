@@ -65,6 +65,9 @@ slurm_config:
   JobAcctGatherType: "jobacct_gather/cgroup"
   JobAcctGatherFrequency: 30
   GresTypes: "gpu"
+  MpiDefault: "pmix"
+  AccountingStorageTRES: "gres/gpu"
+  PropagateResourceLimitsExcept: "MEMLOCK"
 
 # Partition configuration
 slurm_partitions:

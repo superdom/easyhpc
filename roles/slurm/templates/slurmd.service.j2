@@ -6,7 +6,7 @@ ConditionPathExists=/etc/slurm/slurm.conf
 Wants=munge.service
 
 [Service]
-Type=forking
+Type=notify
 {% set configured_ctld = slurm_config.SlurmctldHost | default('') %}
 {% set discovered_hosts = slurmctld_hosts | default(groups['slurm-controller'] | default([])) %}
 {% set ctld_hosts = (discovered_hosts if (discovered_hosts | length > 0) else ([configured_ctld] if configured_ctld else [])) %}
@@ -20,7 +20,7 @@ Type=forking
 {% else %}
 {% set conf_server_arg = '' %}
 {% endif %}
-ExecStart={{ slurm_install_prefix }}/sbin/slurmd{{ conf_server_arg }}
+ExecStart={{ slurm_install_prefix }}/sbin/slurmd --systemd -s{{ conf_server_arg }}
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=process
 Restart=on-failure

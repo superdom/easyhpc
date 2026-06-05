@@ -162,6 +162,23 @@
             or (nvidia_docker_daemon_json.content | default('') | b64decode) is search('\"nvidia\"')
           }}
 
+    # daemon.json having the runtime does not mean the *running* daemon loaded it.
+    # Check the live daemon so a missed restart cannot leave the runtime inactive.
+    - name: Detect NVIDIA runtime active in the running Docker daemon
+      ansible.builtin.shell: |
+        set -o pipefail
+        docker info 2>/dev/null | awk -F: '/Runtimes:/ {print $2}'
+      args:
+        executable: /bin/bash
+      register: nvidia_docker_active_runtimes
+      changed_when: false
+      failed_when: false
+      when: ansible_facts.services['docker.service'] is defined
+
+    - name: Set Docker NVIDIA runtime active fact
+      ansible.builtin.set_fact:
+        nvidia_docker_runtime_active: "{{ 'nvidia' in (nvidia_docker_active_runtimes.stdout | default('')) }}"
+
     - name: Configure NVIDIA runtime for Docker
       ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
       when:
@@ -169,6 +186,19 @@
         - ansible_facts.services['docker.service'] is defined
         - not nvidia_docker_runtime_configured | default(false)
       notify: Restart Docker service for NVIDIA runtime
+
+    # daemon.json already has the runtime but the running daemon never picked it up
+    # (e.g. a previous run wrote the config but the restart was skipped/interrupted).
+    - name: Restart Docker when NVIDIA runtime is configured but not active
+      ansible.builtin.systemd:
+        name: docker
+        state: restarted
+      when:
+        - nvidia_container_toolkit_configure_docker
+        - ansible_facts.services['docker.service'] is defined
+        - nvidia_container_toolkit_restart_runtime | default(true)
+        - nvidia_docker_runtime_configured | default(false)
+        - not nvidia_docker_runtime_active | default(false)
 
     - name: Read containerd config (if present)
       ansible.builtin.slurp:
